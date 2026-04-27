@@ -1,0 +1,370 @@
+package service
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/flowpay/flowpay-backend/internal/domain"
+	"github.com/flowpay/flowpay-backend/internal/notify"
+	"github.com/flowpay/flowpay-backend/internal/repository"
+)
+
+type ChargeDTO struct {
+	repository.Charge
+	Status string `json:"status"`
+}
+
+type ClientDTO struct {
+	repository.ClientRow
+	RiskLevel string `json:"risk_level"`
+}
+
+type DashboardResponse struct {
+	Totals               repository.DashboardTotals `json:"totals"`
+	ChargesNeedAttention []ChargeDTO                `json:"charges_needing_attention"`
+	Tagline              string                     `json:"tagline"`
+	ProductName          string                     `json:"product_name"`
+}
+
+type PlatformOverviewResponse struct {
+	Companies      []repository.CompanyOverviewRow `json:"companies"`
+	TotalCompanies int                             `json:"total_companies"`
+	TotalPaid      float64                         `json:"total_paid"`
+	TotalPending   float64                         `json:"total_pending"`
+	TotalOverdue   float64                         `json:"total_overdue"`
+	TotalOwed      float64                         `json:"total_owed"`
+}
+
+type Service struct {
+	Repo      *repository.Repository
+	Notify    *notify.Dispatcher
+	UploadDir string
+}
+
+func (s *Service) withStatus(ch repository.Charge) ChargeDTO {
+	st := domain.ChargeStatus(ch.PaidAt, ch.DueDate, time.Now())
+	return ChargeDTO{Charge: ch, Status: st}
+}
+
+func (s *Service) ListClients(ctx context.Context, companyID int64) ([]ClientDTO, error) {
+	rows, err := s.Repo.ListClients(ctx, companyID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ClientDTO, 0, len(rows))
+	for _, r := range rows {
+		atRisk := 0.0
+		if r.OverdueCnt > 0 {
+			atRisk = r.TotalOwed
+		}
+		out = append(out, ClientDTO{
+			ClientRow: r,
+			RiskLevel: domain.RiskLevel(r.OverdueCnt, atRisk),
+		})
+	}
+	return out, nil
+}
+
+func (s *Service) CreateClient(ctx context.Context, companyID int64, name, email, phone string) (int64, error) {
+	if name == "" {
+		return 0, errors.New("name required")
+	}
+	return s.Repo.CreateClient(ctx, companyID, name, email, phone)
+}
+
+func (s *Service) SetClientActive(ctx context.Context, companyID, clientID int64, isActive bool) error {
+	return s.Repo.SetClientActive(ctx, companyID, clientID, isActive)
+}
+
+func validFollowupChannel(ch string) bool {
+	switch ch {
+	case "none", "email", "whatsapp", "all":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Service) PatchClient(ctx context.Context, companyID, clientID int64, isActive *bool, followupChannel *string) error {
+	var ch *string
+	if followupChannel != nil {
+		v := strings.TrimSpace(strings.ToLower(*followupChannel))
+		if !validFollowupChannel(v) {
+			return errors.New("followup_channel inválido (none|email|whatsapp|all)")
+		}
+		ch = &v
+	}
+	return s.Repo.PatchClient(ctx, companyID, clientID, isActive, ch)
+}
+
+func (s *Service) ListCharges(ctx context.Context, companyID int64) ([]ChargeDTO, error) {
+	list, err := s.Repo.ListCharges(ctx, companyID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ChargeDTO, 0, len(list))
+	for _, ch := range list {
+		out = append(out, s.withStatus(ch))
+	}
+	return out, nil
+}
+
+func (s *Service) GetCharge(ctx context.Context, companyID, id int64) (*ChargeDTO, error) {
+	ch, err := s.Repo.GetCharge(ctx, companyID, id)
+	if err != nil {
+		return nil, err
+	}
+	dto := s.withStatus(*ch)
+	return &dto, nil
+}
+
+type CreateChargeInput struct {
+	ClientID int64   `json:"client_id"`
+	Amount   float64 `json:"amount"`
+	DueDate  string  `json:"due_date"`
+}
+
+func (s *Service) CreateCharge(ctx context.Context, companyID int64, in CreateChargeInput) (int64, error) {
+	if in.ClientID == 0 || in.Amount <= 0 || in.DueDate == "" {
+		return 0, errors.New("payload de cobro inválido")
+	}
+	due, err := time.ParseInLocation("2006-01-02", in.DueDate, time.Local)
+	if err != nil {
+		return 0, errors.New("due_date debe ser YYYY-MM-DD")
+	}
+	return s.Repo.CreateCharge(ctx, companyID, in.ClientID, in.Amount, due)
+}
+
+func (s *Service) Dashboard(ctx context.Context, companyID int64) (*DashboardResponse, error) {
+	totals, err := s.Repo.DashboardAggregate(ctx, companyID)
+	if err != nil {
+		return nil, err
+	}
+	overdue, _ := s.Repo.ChargesOverdueUnpaid(ctx, companyID)
+	dueSoon, _ := s.Repo.ChargesDueSoon(ctx, companyID, 7)
+	seen := map[int64]struct{}{}
+	var attention []ChargeDTO
+	for _, ch := range overdue {
+		if _, ok := seen[ch.ID]; ok {
+			continue
+		}
+		seen[ch.ID] = struct{}{}
+		attention = append(attention, s.withStatus(ch))
+	}
+	for _, ch := range dueSoon {
+		if _, ok := seen[ch.ID]; ok {
+			continue
+		}
+		seen[ch.ID] = struct{}{}
+		attention = append(attention, s.withStatus(ch))
+	}
+	return &DashboardResponse{
+		Totals:               totals,
+		ChargesNeedAttention: attention,
+		Tagline:              "Te ayudamos a cobrar más rápido, automáticamente.",
+		ProductName:          "FlowPay",
+	}, nil
+}
+
+func (s *Service) SendReminderNow(ctx context.Context, companyID, chargeID int64) error {
+	ch, err := s.Repo.GetCharge(ctx, companyID, chargeID)
+	if err != nil {
+		return err
+	}
+	st := domain.ChargeStatus(ch.PaidAt, ch.DueDate, time.Now())
+	if st == "paid" {
+		return errors.New("cobro ya cerrado")
+	}
+
+	channel := strings.TrimSpace(strings.ToLower(ch.ClientFollowupChannel))
+	if channel == "" {
+		channel = "all"
+	}
+	if channel == "none" {
+		return errors.New("cliente con seguimiento desactivado (none)")
+	}
+
+	priorOverdue, _ := s.Repo.CountRemindersByKind(ctx, chargeID, "overdue")
+	subj, textBody := manualReminderTemplate(*ch, priorOverdue, time.Now())
+	emailMessage := fmt.Sprintf("Asunto: %s\n\n%s", subj, textBody)
+	whatsAppMessage := textBody
+	now := time.Now()
+
+	sendEmail := channel == "all" || channel == "email"
+	sendWhatsApp := channel == "all" || channel == "whatsapp"
+
+	if s.Notify != nil {
+		t0 := dateOnly(now)
+		t1 := dateOnly(ch.DueDate)
+		sendEmailOnly := func() {
+			switch {
+			case t0.Before(t1):
+				s.Notify.SendApproachingEmail(*ch)
+			case t0.Equal(t1):
+				s.Notify.SendDueTodayEmail(*ch)
+			default:
+				if priorOverdue == 0 {
+					s.Notify.SendOverdueFirstEmail(*ch)
+				} else {
+					s.Notify.SendOverdueFollowUpEmail(*ch)
+				}
+			}
+		}
+		sendWhatsAppOnly := func() {
+			switch {
+			case t0.Before(t1):
+				s.Notify.SendApproachingWhatsApp(*ch)
+			case t0.Equal(t1):
+				s.Notify.SendDueTodayWhatsApp(*ch)
+			default:
+				if priorOverdue == 0 {
+					s.Notify.SendOverdueFirstWhatsApp(*ch)
+				} else {
+					s.Notify.SendOverdueFollowUpWhatsApp(*ch)
+				}
+			}
+		}
+		switch {
+		case sendEmail && sendWhatsApp:
+			s.Notify.SendManual(*ch, priorOverdue, now)
+		case sendEmail:
+			sendEmailOnly()
+		case sendWhatsApp:
+			sendWhatsAppOnly()
+		}
+	}
+
+	if sendEmail {
+		if _, err := s.Repo.InsertReminder(ctx, chargeID, "manual", "email", "sent", emailMessage, &now); err != nil {
+			return err
+		}
+	}
+	if sendWhatsApp {
+		if _, err := s.Repo.InsertReminder(ctx, chargeID, "manual", "whatsapp", "sent", whatsAppMessage, &now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func manualReminderTemplate(ch repository.Charge, priorOverdueReminders int, now time.Time) (subject string, body string) {
+	t0 := dateOnly(now)
+	t1 := dateOnly(ch.DueDate)
+	switch {
+	case t0.Before(t1):
+		return "Recordatorio: cobro próximo a vencer", notify.BodyApproaching(ch)
+	case t0.Equal(t1):
+		return "Hoy vence un cobro pendiente", notify.BodyDueToday(ch)
+	default:
+		if priorOverdueReminders == 0 {
+			return "Cobro vencido — acción requerida", notify.BodyOverdueFirst(ch)
+		}
+		return "Seguimiento de cobro pendiente", notify.BodyOverdueFollowUp(ch)
+	}
+}
+
+func dateOnly(t time.Time) time.Time {
+	y, m, day := t.Date()
+	return time.Date(y, m, day, 0, 0, 0, 0, t.Location())
+}
+
+func (s *Service) ListReminders(ctx context.Context, companyID, chargeID int64) ([]repository.Reminder, error) {
+	if _, err := s.Repo.GetCharge(ctx, companyID, chargeID); err != nil {
+		return nil, err
+	}
+	return s.Repo.ListReminders(ctx, chargeID)
+}
+
+// PatchChargeInput: campos opcionales. set_paid true = marcar cobrado hoy; false = reabrir (quita pagos).
+type PatchChargeInput struct {
+	ClientID *int64   `json:"client_id"`
+	DueDate  *string  `json:"due_date"`
+	Amount   *float64 `json:"amount"`
+	SetPaid  *bool    `json:"set_paid"`
+}
+
+func (s *Service) PatchCharge(ctx context.Context, companyID, chargeID int64, in PatchChargeInput) error {
+	has := in.ClientID != nil || in.DueDate != nil || in.Amount != nil || in.SetPaid != nil
+	if !has {
+		return errors.New("nada que actualizar")
+	}
+	if in.ClientID != nil {
+		ok, err := s.Repo.ActiveClientBelongsToCompany(ctx, companyID, *in.ClientID)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return errors.New("cliente no válido o inactivo para esta empresa")
+		}
+	}
+	if in.Amount != nil && *in.Amount <= 0 {
+		return errors.New("amount debe ser mayor a 0")
+	}
+	var duePtr *time.Time
+	if in.DueDate != nil && *in.DueDate != "" {
+		t, err := time.ParseInLocation("2006-01-02", *in.DueDate, time.Local)
+		if err != nil {
+			return errors.New("due_date debe ser YYYY-MM-DD")
+		}
+		duePtr = &t
+	}
+
+	if err := s.Repo.UpdateChargeFields(ctx, companyID, chargeID, in.ClientID, duePtr, in.Amount); err != nil {
+		return err
+	}
+
+	if in.SetPaid == nil {
+		return nil
+	}
+	if !*in.SetPaid {
+		return s.Repo.ClearChargePayment(ctx, companyID, chargeID)
+	}
+	ch, err := s.Repo.GetCharge(ctx, companyID, chargeID)
+	if err != nil {
+		return err
+	}
+	if ch.PaidAt != nil {
+		return nil
+	}
+	return s.Repo.MarkChargePaid(ctx, chargeID, ch.Amount)
+}
+
+func (s *Service) RecordPayment(ctx context.Context, companyID, chargeID int64, amount float64) error {
+	ch, err := s.Repo.GetCharge(ctx, companyID, chargeID)
+	if err != nil {
+		return err
+	}
+	if ch.PaidAt != nil {
+		return errors.New("already paid")
+	}
+	if amount < ch.Amount-0.01 {
+		return errors.New("amount must cover charge total for MVP")
+	}
+	return s.Repo.MarkChargePaid(ctx, chargeID, amount)
+}
+
+func (s *Service) PlatformOverview(ctx context.Context) (*PlatformOverviewResponse, error) {
+	rows, err := s.Repo.PlatformCompaniesOverview(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := &PlatformOverviewResponse{
+		Companies:      rows,
+		TotalCompanies: len(rows),
+	}
+	for _, r := range rows {
+		out.TotalPaid += r.PaidAmount
+		out.TotalPending += r.PendingAmount
+		out.TotalOverdue += r.OverdueAmount
+		out.TotalOwed += r.OwedAmount
+	}
+	return out, nil
+}
+
+func ErrNotFound(err error) bool {
+	return errors.Is(err, sql.ErrNoRows)
+}
