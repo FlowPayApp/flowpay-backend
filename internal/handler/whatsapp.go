@@ -4,10 +4,8 @@ import (
 	"errors"
 	"log"
 	"net/http"
-	"strconv"
 	"strings"
 
-	"github.com/flowpay/flowpay-backend/internal/repository"
 	"github.com/flowpay/flowpay-backend/internal/services"
 	"github.com/flowpay/flowpay-backend/internal/twiliovalidate"
 	"github.com/gin-gonic/gin"
@@ -17,51 +15,6 @@ import (
 type TwilioWebhookDeps struct {
 	AuthToken               string
 	ValidateTwilioSignature bool
-}
-
-func (h *HTTP) listWhatsAppMessages(c *gin.Context) {
-	if h.WhatsApp == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "whatsapp no configurado"})
-		return
-	}
-	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
-	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
-	phone := c.Query("phone")
-	list, err := h.WhatsApp.ListMessages(c.Request.Context(), h.companyID(c), limit, offset, phone)
-	if err != nil {
-		log.Printf("[FlowPay WhatsApp] list messages: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, list)
-}
-
-type sendWhatsAppBody struct {
-	To      string `json:"to"`
-	Message string `json:"message"`
-}
-
-func (h *HTTP) sendWhatsAppMessage(c *gin.Context) {
-	if h.WhatsApp == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "whatsapp no configurado"})
-		return
-	}
-	var body sendWhatsAppBody
-	if err := c.ShouldBindJSON(&body); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json"})
-		return
-	}
-	err := h.WhatsApp.SendMessage(c.Request.Context(), h.companyID(c), body.To, body.Message)
-	if err != nil {
-		if errors.Is(err, repository.ErrNoActiveWhatsAppNumber) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		log.Printf("[FlowPay WhatsApp] send: %v", err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 func (h *HTTP) twilioWhatsAppWebhook(c *gin.Context) {

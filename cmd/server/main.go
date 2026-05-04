@@ -42,11 +42,7 @@ func main() {
 		log.Fatal("upload dir:", err)
 	}
 	svc := &service.Service{Repo: repo, Notify: cfg.Notify, UploadDir: cfg.UploadDir}
-	wa := &services.WhatsAppService{
-		Repo:       repo,
-		AccountSID: cfg.TwilioAccountSID,
-		AuthToken:  cfg.TwilioAuthToken,
-	}
+	wa := &services.WhatsAppService{Repo: repo}
 	h := &handler.HTTP{
 		Svc:      svc,
 		WhatsApp: wa,

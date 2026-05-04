@@ -69,11 +69,59 @@ func (s *Service) ListClients(ctx context.Context, companyID int64) ([]ClientDTO
 	return out, nil
 }
 
-func (s *Service) CreateClient(ctx context.Context, companyID int64, name, email, phone string) (int64, error) {
-	if name == "" {
-		return 0, errors.New("name required")
+func (s *Service) GetClient(ctx context.Context, companyID, clientID int64) (*ClientDTO, error) {
+	row, err := s.Repo.GetClient(ctx, companyID, clientID)
+	if err != nil {
+		return nil, err
 	}
-	return s.Repo.CreateClient(ctx, companyID, name, email, phone)
+	atRisk := 0.0
+	if row.OverdueCnt > 0 {
+		atRisk = row.TotalOwed
+	}
+	return &ClientDTO{
+		ClientRow: *row,
+		RiskLevel: domain.RiskLevel(row.OverdueCnt, atRisk),
+	}, nil
+}
+
+func (s *Service) DeleteClient(ctx context.Context, companyID, clientID int64) error {
+	return s.Repo.DeleteClient(ctx, companyID, clientID)
+}
+
+// CreateClientInput datos para alta manual (misma semántica que columnas de la planilla Excel).
+type CreateClientInput struct {
+	Name          string
+	Email         string
+	Phone         string
+	Address       string
+	ClientCode    string
+	BranchName    string
+	PaymentTerms  string
+}
+
+func (s *Service) CreateClient(ctx context.Context, companyID int64, in CreateClientInput) (int64, error) {
+	name := strings.TrimSpace(in.Name)
+	if name == "" {
+		return 0, errors.New("el nombre del encargado (NOMBRE) es obligatorio")
+	}
+	ext := buildExternalCode(in.BranchName, in.ClientCode)
+	id, err := s.Repo.CreateClient(ctx, companyID,
+		name,
+		strings.TrimSpace(in.Email),
+		strings.TrimSpace(in.Phone),
+		ext,
+		strings.TrimSpace(in.Address),
+		strings.TrimSpace(in.ClientCode),
+		strings.TrimSpace(in.BranchName),
+		strings.TrimSpace(in.PaymentTerms),
+	)
+	if err != nil {
+		if mysqlErrNum(err) == 1062 {
+			return 0, errors.New("ya existe un cliente con la misma clave de código/sucursal en esta empresa")
+		}
+		return 0, err
+	}
+	return id, nil
 }
 
 func (s *Service) SetClientActive(ctx context.Context, companyID, clientID int64, isActive bool) error {
@@ -89,16 +137,59 @@ func validFollowupChannel(ch string) bool {
 	}
 }
 
-func (s *Service) PatchClient(ctx context.Context, companyID, clientID int64, isActive *bool, followupChannel *string) error {
-	var ch *string
-	if followupChannel != nil {
-		v := strings.TrimSpace(strings.ToLower(*followupChannel))
+// PatchClientInput actualización parcial vía PATCH (activo, seguimiento y/o datos de ficha).
+type PatchClientInput struct {
+	IsActive        *bool
+	FollowupChannel *string
+	Name            *string
+	Email           *string
+	Phone           *string
+	Address         *string
+	ClientCode      *string
+	BranchName      *string
+	PaymentTerms    *string
+}
+
+func (s *Service) PatchClient(ctx context.Context, companyID, clientID int64, in PatchClientInput) error {
+	var follow *string
+	if in.FollowupChannel != nil {
+		v := strings.TrimSpace(strings.ToLower(*in.FollowupChannel))
 		if !validFollowupChannel(v) {
 			return errors.New("followup_channel inválido (none|email|whatsapp|all)")
 		}
-		ch = &v
+		follow = &v
 	}
-	return s.Repo.PatchClient(ctx, companyID, clientID, isActive, ch)
+	patch := repository.ClientPatch{
+		IsActive:        in.IsActive,
+		FollowupChannel: follow,
+	}
+	profile := in.Name != nil || in.Email != nil || in.Phone != nil || in.Address != nil ||
+		in.ClientCode != nil || in.BranchName != nil || in.PaymentTerms != nil
+	if profile {
+		if in.Name == nil || strings.TrimSpace(*in.Name) == "" {
+			return errors.New("el nombre del encargado (NOMBRE) es obligatorio")
+		}
+		if in.ClientCode == nil || in.BranchName == nil {
+			return errors.New("código y sucursal son obligatorios al actualizar los datos del cliente")
+		}
+		ext := buildExternalCode(*in.BranchName, *in.ClientCode)
+		patch.Name = in.Name
+		patch.Email = in.Email
+		patch.Phone = in.Phone
+		patch.Address = in.Address
+		patch.ClientCode = in.ClientCode
+		patch.BranchName = in.BranchName
+		patch.PaymentTerms = in.PaymentTerms
+		patch.ExternalCode = &ext
+	}
+	err := s.Repo.PatchClient(ctx, companyID, clientID, patch)
+	if err != nil {
+		if mysqlErrNum(err) == 1062 {
+			return errors.New("ya existe un cliente con la misma clave de código/sucursal en esta empresa")
+		}
+		return err
+	}
+	return nil
 }
 
 func (s *Service) ListCharges(ctx context.Context, companyID int64) ([]ChargeDTO, error) {
@@ -137,6 +228,10 @@ func (s *Service) CreateCharge(ctx context.Context, companyID int64, in CreateCh
 		return 0, errors.New("due_date debe ser YYYY-MM-DD")
 	}
 	return s.Repo.CreateCharge(ctx, companyID, in.ClientID, in.Amount, due)
+}
+
+func (s *Service) DeleteCharge(ctx context.Context, companyID, chargeID int64) error {
+	return s.Repo.DeleteCharge(ctx, companyID, chargeID)
 }
 
 func (s *Service) Dashboard(ctx context.Context, companyID int64) (*DashboardResponse, error) {
