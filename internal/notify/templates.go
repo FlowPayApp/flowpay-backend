@@ -18,6 +18,16 @@ func formatDateES(t time.Time) string {
 	return fmt.Sprintf("%d de %s", t.Day(), mesesES[int(t.Month())])
 }
 
+// FormatDueDateSpanish expone fecha de vencimiento legible (p. ej. plantillas externas).
+func FormatDueDateSpanish(t time.Time) string {
+	return formatDateES(t)
+}
+
+// FormatMoneyCLP expone monto con separador de miles (plantillas / API).
+func FormatMoneyCLP(amount float64) string {
+	return formatMoneyCL(amount)
+}
+
 // formatMoneyCL formatea como 1.200.000 (enteros, separador miles).
 func formatMoneyCL(amount float64) string {
 	n := int64(amount + 0.5)

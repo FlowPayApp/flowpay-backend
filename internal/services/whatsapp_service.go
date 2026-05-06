@@ -41,9 +41,16 @@ func (s *WhatsAppService) HandleInbound(ctx context.Context, fromRaw, toRaw, bod
 		fromNorm = strings.TrimSpace(fromRaw)
 	}
 	content := strings.TrimSpace(body)
-	log.Printf("[FlowPay WhatsApp] inbound company=%d from=%s to=%s len=%d", wn.CompanyID, fromNorm, toNorm, len(content))
+	var chargeID *int64
+	if cid, err := s.Repo.FindOpenChargeIDForInboundWhatsApp(ctx, wn.CompanyID, fromNorm); err == nil && cid != nil {
+		chargeID = cid
+	} else if err != nil {
+		log.Printf("[FlowPay WhatsApp] warn asociando cobro inbound: %v", err)
+	}
+	log.Printf("[FlowPay WhatsApp] inbound company=%d from=%s to=%s charge_id=%v len=%d", wn.CompanyID, fromNorm, toNorm, chargeID, len(content))
 	_, err = s.Repo.InsertMessage(ctx, &models.Message{
 		CompanyID:  wn.CompanyID,
+		ChargeID:   chargeID,
 		FromNumber: fromNorm,
 		ToNumber:   toNorm,
 		Content:    content,

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/flowpay/flowpay-backend/internal/notify"
+	"github.com/flowpay/flowpay-backend/internal/remindercontent"
 	"github.com/flowpay/flowpay-backend/internal/repository"
 )
 
@@ -55,16 +56,28 @@ func runOnce(ctx context.Context, repo *repository.Repository, d *notify.Dispatc
 			continue
 		}
 		td := truncate(ch.DueDate)
-		subject, body := dueSoonTemplate(ch, tn, td)
+		var phase string
+		var daysUntil int
+		switch {
+		case tn.Before(td):
+			phase = remindercontent.PhaseApproaching
+			daysUntil = remindercontent.CalendarDaysUntilDue(tn, td)
+		case tn.Equal(td):
+			phase = remindercontent.PhaseDueToday
+			daysUntil = 0
+		default:
+			continue
+		}
+		subject, body, err := remindercontent.ResolveSubjectAndBody(ctx, repo, ch.CompanyID, phase, daysUntil, 0, ch)
+		if err != nil {
+			log.Println("[FlowPay Job] resolve template due_soon:", err)
+			subject, body = dueSoonTemplate(ch, tn, td)
+		}
 		log.Println("[FlowPay Job]", subject)
 		if ok, _ := shouldPersist(ctx, repo, ch.ID, "due_soon"); ok {
 			if shouldSendEmail(ch.ClientFollowupChannel) {
 				if d != nil {
-					if tn.Before(td) {
-						d.SendApproachingEmail(ch)
-					} else if tn.Equal(td) {
-						d.SendDueTodayEmail(ch)
-					}
+					d.SendReminderEmail(ch, subject, body)
 				}
 				emailMessage := fmt.Sprintf("Asunto: %s\n\n%s", subject, body)
 				if _, err := repo.InsertReminder(ctx, ch.ID, "due_soon", "email", "sent", emailMessage, ptrNow()); err != nil {
@@ -73,11 +86,7 @@ func runOnce(ctx context.Context, repo *repository.Repository, d *notify.Dispatc
 			}
 			if shouldSendWhatsApp(ch.ClientFollowupChannel) {
 				if d != nil {
-					if tn.Before(td) {
-						d.SendApproachingWhatsApp(ch)
-					} else if tn.Equal(td) {
-						d.SendDueTodayWhatsApp(ch)
-					}
+					d.SendReminderWhatsApp(ch, body)
 				}
 				if _, err := repo.InsertReminder(ctx, ch.ID, "due_soon", "whatsapp", "sent", body, ptrNow()); err != nil {
 					log.Println("[FlowPay Job] insert reminder WA:", err)
@@ -99,16 +108,20 @@ func runOnce(ctx context.Context, repo *repository.Repository, d *notify.Dispatc
 			log.Println("[FlowPay Job] count overdue reminders:", err)
 			priorOverdue = 0
 		}
-		subject, body := overdueTemplate(ch, priorOverdue)
+		phase := remindercontent.PhaseOverdueFollowUp
+		if priorOverdue == 0 {
+			phase = remindercontent.PhaseOverdueFirst
+		}
+		subject, body, err := remindercontent.ResolveSubjectAndBody(ctx, repo, ch.CompanyID, phase, 0, priorOverdue, ch)
+		if err != nil {
+			log.Println("[FlowPay Job] resolve template overdue:", err)
+			subject, body = overdueTemplate(ch, priorOverdue)
+		}
 		log.Println("[FlowPay Job]", subject)
 		if ok, _ := shouldPersist(ctx, repo, ch.ID, "overdue"); ok {
 			if shouldSendEmail(ch.ClientFollowupChannel) {
 				if d != nil {
-					if priorOverdue == 0 {
-						d.SendOverdueFirstEmail(ch)
-					} else {
-						d.SendOverdueFollowUpEmail(ch)
-					}
+					d.SendReminderEmail(ch, subject, body)
 				}
 				emailMessage := fmt.Sprintf("Asunto: %s\n\n%s", subject, body)
 				if _, err := repo.InsertReminder(ctx, ch.ID, "overdue", "email", "sent", emailMessage, ptrNow()); err != nil {
@@ -117,11 +130,7 @@ func runOnce(ctx context.Context, repo *repository.Repository, d *notify.Dispatc
 			}
 			if shouldSendWhatsApp(ch.ClientFollowupChannel) {
 				if d != nil {
-					if priorOverdue == 0 {
-						d.SendOverdueFirstWhatsApp(ch)
-					} else {
-						d.SendOverdueFollowUpWhatsApp(ch)
-					}
+					d.SendReminderWhatsApp(ch, body)
 				}
 				if _, err := repo.InsertReminder(ctx, ch.ID, "overdue", "whatsapp", "sent", body, ptrNow()); err != nil {
 					log.Println("[FlowPay Job] insert reminder WA:", err)

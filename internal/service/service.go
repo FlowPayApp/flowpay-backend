@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/flowpay/flowpay-backend/internal/domain"
+	"github.com/flowpay/flowpay-backend/internal/models"
 	"github.com/flowpay/flowpay-backend/internal/notify"
+	"github.com/flowpay/flowpay-backend/internal/remindercontent"
 	"github.com/flowpay/flowpay-backend/internal/repository"
 )
 
@@ -284,52 +286,27 @@ func (s *Service) SendReminderNow(ctx context.Context, companyID, chargeID int64
 	}
 
 	priorOverdue, _ := s.Repo.CountRemindersByKind(ctx, chargeID, "overdue")
-	subj, textBody := manualReminderTemplate(*ch, priorOverdue, time.Now())
+	now := time.Now()
+	phase, daysU := remindercontent.PhaseFromCharge(*ch, now, priorOverdue)
+	subj, textBody, resErr := remindercontent.ResolveSubjectAndBody(ctx, s.Repo, companyID, phase, daysU, priorOverdue, *ch)
+	if resErr != nil {
+		subj, textBody = manualReminderTemplate(*ch, priorOverdue, now)
+	}
 	emailMessage := fmt.Sprintf("Asunto: %s\n\n%s", subj, textBody)
 	whatsAppMessage := textBody
-	now := time.Now()
 
 	sendEmail := channel == "all" || channel == "email"
 	sendWhatsApp := channel == "all" || channel == "whatsapp"
 
 	if s.Notify != nil {
-		t0 := dateOnly(now)
-		t1 := dateOnly(ch.DueDate)
-		sendEmailOnly := func() {
-			switch {
-			case t0.Before(t1):
-				s.Notify.SendApproachingEmail(*ch)
-			case t0.Equal(t1):
-				s.Notify.SendDueTodayEmail(*ch)
-			default:
-				if priorOverdue == 0 {
-					s.Notify.SendOverdueFirstEmail(*ch)
-				} else {
-					s.Notify.SendOverdueFollowUpEmail(*ch)
-				}
-			}
-		}
-		sendWhatsAppOnly := func() {
-			switch {
-			case t0.Before(t1):
-				s.Notify.SendApproachingWhatsApp(*ch)
-			case t0.Equal(t1):
-				s.Notify.SendDueTodayWhatsApp(*ch)
-			default:
-				if priorOverdue == 0 {
-					s.Notify.SendOverdueFirstWhatsApp(*ch)
-				} else {
-					s.Notify.SendOverdueFollowUpWhatsApp(*ch)
-				}
-			}
-		}
 		switch {
 		case sendEmail && sendWhatsApp:
-			s.Notify.SendManual(*ch, priorOverdue, now)
+			s.Notify.SendReminderEmail(*ch, subj, textBody)
+			s.Notify.SendReminderWhatsApp(*ch, textBody)
 		case sendEmail:
-			sendEmailOnly()
+			s.Notify.SendReminderEmail(*ch, subj, textBody)
 		case sendWhatsApp:
-			sendWhatsAppOnly()
+			s.Notify.SendReminderWhatsApp(*ch, textBody)
 		}
 	}
 
@@ -344,6 +321,86 @@ func (s *Service) SendReminderNow(ctx context.Context, companyID, chargeID int64
 		}
 	}
 	return nil
+}
+
+// MessagingSettingsResponse plantillas + textos globales para recordatorios.
+type MessagingSettingsResponse struct {
+	TransferInstructions string                        `json:"transfer_instructions"`
+	PaymentURLTemplate    string                        `json:"payment_url_template"`
+	Templates             []repository.ReminderTemplateRow `json:"templates"`
+}
+
+// MessagingTemplateInput fila de plantilla desde el panel.
+type MessagingTemplateInput struct {
+	Phase        string `json:"phase"`
+	DayMin       int    `json:"day_min"`
+	DayMax       int    `json:"day_max"`
+	SortOrder    int    `json:"sort_order"`
+	EmailSubject string `json:"email_subject"`
+	Body         string `json:"body"`
+}
+
+// SaveMessagingInput PUT /api/company/messaging
+type SaveMessagingInput struct {
+	TransferInstructions string                   `json:"transfer_instructions"`
+	PaymentURLTemplate   string                   `json:"payment_url_template"`
+	Templates            []MessagingTemplateInput `json:"templates"`
+}
+
+func (s *Service) GetCompanyMessagingSettings(ctx context.Context, companyID int64) (*MessagingSettingsResponse, error) {
+	cm, err := s.Repo.GetCompanyMessaging(ctx, companyID)
+	if err != nil {
+		return nil, err
+	}
+	tpl, err := s.Repo.ListReminderTemplates(ctx, companyID)
+	if err != nil {
+		tpl = nil
+	}
+	return &MessagingSettingsResponse{
+		TransferInstructions: cm.TransferInstructions,
+		PaymentURLTemplate:   cm.PaymentURLTemplate,
+		Templates:            tpl,
+	}, nil
+}
+
+func (s *Service) SaveCompanyMessagingSettings(ctx context.Context, companyID int64, in SaveMessagingInput) error {
+	validPhases := map[string]struct{}{
+		remindercontent.PhaseApproaching:     {},
+		remindercontent.PhaseDueToday:        {},
+		remindercontent.PhaseOverdueFirst:    {},
+		remindercontent.PhaseOverdueFollowUp: {},
+	}
+	for _, t := range in.Templates {
+		p := strings.ToLower(strings.TrimSpace(t.Phase))
+		if p == "" {
+			continue
+		}
+		if _, ok := validPhases[p]; !ok {
+			return fmt.Errorf("fase inválida: %s (use approaching|due_today|overdue_first|overdue_followup)", t.Phase)
+		}
+		if p == remindercontent.PhaseApproaching && t.DayMin > t.DayMax {
+			return errors.New("En plantillas approaching, day_min no puede ser mayor que day_max")
+		}
+	}
+	if err := s.Repo.UpdateCompanyMessaging(ctx, companyID, in.TransferInstructions, in.PaymentURLTemplate); err != nil {
+		return err
+	}
+	rows := make([]repository.ReminderTemplateRow, 0, len(in.Templates))
+	for _, t := range in.Templates {
+		if strings.TrimSpace(t.Body) == "" {
+			continue
+		}
+		p := strings.ToLower(strings.TrimSpace(t.Phase))
+		rows = append(rows, repository.ReminderTemplateRow{
+			Phase:        p,
+			DayMin:       t.DayMin,
+			DayMax:       t.DayMax,
+			SortOrder:    t.SortOrder,
+			EmailSubject: t.EmailSubject,
+			Body:         t.Body,
+		})
+	}
+	return s.Repo.ReplaceReminderTemplates(ctx, companyID, rows)
 }
 
 func manualReminderTemplate(ch repository.Charge, priorOverdueReminders int, now time.Time) (subject string, body string) {
@@ -372,6 +429,52 @@ func (s *Service) ListReminders(ctx context.Context, companyID, chargeID int64) 
 		return nil, err
 	}
 	return s.Repo.ListReminders(ctx, chargeID)
+}
+
+// ListChargeInboundWhatsApp respuestas del cliente (WhatsApp entrante) vinculadas al cobro.
+func (s *Service) ListChargeInboundWhatsApp(ctx context.Context, companyID, chargeID int64) ([]models.Message, error) {
+	if _, err := s.Repo.GetCharge(ctx, companyID, chargeID); err != nil {
+		return nil, err
+	}
+	return s.Repo.ListInboundMessagesForCharge(ctx, companyID, chargeID)
+}
+
+// SimulateChargeInboundWhatsApp inserta un mensaje entrante de prueba vinculado al cobro (demo / QA).
+func (s *Service) SimulateChargeInboundWhatsApp(ctx context.Context, companyID, chargeID int64, text string) (*models.Message, error) {
+	ch, err := s.Repo.GetCharge(ctx, companyID, chargeID)
+	if err != nil {
+		return nil, err
+	}
+	msg := strings.TrimSpace(text)
+	if msg == "" {
+		msg = "Hola, recibí el aviso. ¿A qué cuenta transfiero?"
+	}
+	fromNorm := "whatsapp:+56900000001"
+	if ch.ClientPhone != nil {
+		n := notify.NormalizeWhatsAppForTwilio(*ch.ClientPhone)
+		if n != "" {
+			fromNorm = n
+		}
+	}
+	toNorm := "whatsapp:+10000000000"
+	if tn, err := s.Repo.FirstActiveWhatsAppToForCompany(ctx, companyID); err == nil && strings.TrimSpace(tn) != "" {
+		toNorm = strings.TrimSpace(tn)
+	}
+	cid := chargeID
+	m := &models.Message{
+		CompanyID:  companyID,
+		ChargeID:   &cid,
+		FromNumber: fromNorm,
+		ToNumber:   toNorm,
+		Content:    msg,
+		Direction:  "inbound",
+		Status:     "received",
+	}
+	id, err := s.Repo.InsertMessage(ctx, m)
+	if err != nil {
+		return nil, err
+	}
+	return s.Repo.GetMessageByID(ctx, companyID, id)
 }
 
 // PatchChargeInput: campos opcionales. set_paid true = marcar cobrado hoy; false = reabrir (quita pagos).

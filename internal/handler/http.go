@@ -68,11 +68,15 @@ func (h *HTTP) Register(r *gin.Engine, jwtMiddleware gin.HandlerFunc) {
 		api.PATCH("/charges/:id", h.patchCharge)
 		api.DELETE("/charges/:id", h.deleteCharge)
 		api.GET("/charges/:id/reminders", h.listReminders)
+		api.GET("/charges/:id/inbound-whatsapp", h.listChargeInboundWhatsApp)
+		api.POST("/charges/:id/inbound-whatsapp/simulate", h.simulateChargeInboundWhatsApp)
 		api.POST("/charges/:id/reminders", h.sendReminder)
 		api.POST("/charges/:id/attachment", h.uploadChargeAttachment)
 		api.POST("/payments", h.recordPayment)
 		api.GET("/dashboard", h.dashboard)
 		api.GET("/platform/overview", h.platformOverview)
+		api.GET("/company/messaging", h.getCompanyMessaging)
+		api.PUT("/company/messaging", h.putCompanyMessaging)
 	}
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -322,6 +326,70 @@ func (h *HTTP) listReminders(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, list)
+}
+
+func (h *HTTP) listChargeInboundWhatsApp(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad id"})
+		return
+	}
+	list, err := h.Svc.ListChargeInboundWhatsApp(c.Request.Context(), h.companyID(c), id)
+	if err != nil {
+		if service.ErrNotFound(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, list)
+}
+
+type simulateInboundBody struct {
+	Text string `json:"text"`
+}
+
+func (h *HTTP) simulateChargeInboundWhatsApp(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad id"})
+		return
+	}
+	var body simulateInboundBody
+	_ = c.ShouldBindJSON(&body)
+	m, err := h.Svc.SimulateChargeInboundWhatsApp(c.Request.Context(), h.companyID(c), id, body.Text)
+	if err != nil {
+		if service.ErrNotFound(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, m)
+}
+
+func (h *HTTP) getCompanyMessaging(c *gin.Context) {
+	out, err := h.Svc.GetCompanyMessagingSettings(c.Request.Context(), h.companyID(c))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+func (h *HTTP) putCompanyMessaging(c *gin.Context) {
+	var body service.SaveMessagingInput
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "payload inválido"})
+		return
+	}
+	if err := h.Svc.SaveCompanyMessagingSettings(c.Request.Context(), h.companyID(c), body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 func (h *HTTP) sendReminder(c *gin.Context) {

@@ -16,6 +16,7 @@ type WhatsAppNumber struct {
 type Message struct {
 	ID         int64     `json:"id"`
 	CompanyID  int64     `json:"company_id"`
+	ChargeID   *int64    `json:"charge_id,omitempty"`
 	FromNumber string    `json:"from_number"`
 	ToNumber   string    `json:"to_number"`
 	Content    string    `json:"content"`
