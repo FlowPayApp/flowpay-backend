@@ -3,17 +3,20 @@ package main
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
-	_ "github.com/go-sql-driver/mysql"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "github.com/joho/godotenv/autoload"
 
 	"github.com/flowpay/flowpay-backend/internal/config"
@@ -27,14 +30,14 @@ import (
 
 func main() {
 	cfg := config.Load()
-	db, err := sql.Open("mysql", cfg.DSN)
+	db, err := sql.Open("pgx", cfg.DSN)
 	if err != nil {
 		log.Fatal(err)
 	}
 	db.SetMaxOpenConns(10)
 	db.SetConnMaxLifetime(time.Minute * 3)
 	if err := db.Ping(); err != nil {
-		log.Fatal("mysql ping:", err)
+		log.Fatal("postgres ping:", err)
 	}
 
 	repo := repository.New(db)
@@ -72,7 +75,7 @@ func main() {
 
 	srv := &http.Server{Addr: cfg.Addr, Handler: r}
 	go func() {
-		log.Printf("FlowPay API escuchando en %s", cfg.Addr)
+		printStartupStatus(db, cfg.Addr, cfg.DSN, cfg.ReminderInterval, cfg.JWTSecret)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal(err)
 		}
@@ -84,4 +87,68 @@ func main() {
 	_ = srv.Shutdown(shutdownCtx)
 	_ = db.Close()
 	log.Println("servidor detenido")
+}
+
+func printStartupStatus(db *sql.DB, addr, dsn string, reminderInterval time.Duration, jwtSecret string) {
+	const (
+		reset  = "\033[0m"
+		bold   = "\033[1m"
+		cyan   = "\033[36m"
+		green  = "\033[32m"
+		yellow = "\033[33m"
+	)
+	ok := func(v string) string { return green + "OK" + reset + " " + v }
+	warn := func(v string) string { return yellow + "WARN" + reset + " " + v }
+
+	check := func(table string) bool {
+		var exists bool
+		err := db.QueryRow(`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name=$1)`, table).Scan(&exists)
+		return err == nil && exists
+	}
+
+	log.Println(cyan + "╔══════════════════════════════════════════════════════╗" + reset)
+	log.Println(cyan + "║" + reset + " " + bold + "FlowPay API · Estado de inicio" + reset + "                  " + cyan + "║" + reset)
+	log.Println(cyan + "╠══════════════════════════════════════════════════════╣" + reset)
+	log.Printf(cyan+"║"+reset+" %s", ok("DB conectada"))
+	log.Printf(cyan+"║"+reset+" %s", ok("DB destino: "+safeDSN(dsn)))
+	log.Printf(cyan+"║"+reset+" %s", ok("HTTP listening en "+addr))
+	log.Printf(cyan+"║"+reset+" %s", ok("Healthcheck: GET "+addr+"/health"))
+	log.Printf(cyan+"║"+reset+" %s", ok("Reminder job activo ("+reminderInterval.String()+")"))
+
+	if strings.TrimSpace(jwtSecret) == "" {
+		log.Printf(cyan+"║"+reset+" %s", warn("FLOWPAY_JWT_SECRET vacío (modo dev)"))
+	} else {
+		log.Printf(cyan+"║"+reset+" %s", ok("JWT secret cargado"))
+	}
+
+	required := []string{"companies", "clients", "charges", "users"}
+	var miss []string
+	for _, t := range required {
+		if !check(t) {
+			miss = append(miss, t)
+		}
+	}
+	if len(miss) == 0 {
+		log.Printf(cyan+"║"+reset+" %s", ok("Tablas críticas en public: "+strings.Join(required, ", ")))
+	} else {
+		log.Printf(cyan+"║"+reset+" %s", warn("Faltan tablas: "+strings.Join(miss, ", ")))
+		log.Printf(cyan+"║"+reset+" %s", warn("Ejecuta Mysql/postgresql_migration/02_schema.sql"))
+	}
+
+	log.Printf(cyan+"║"+reset+" %s", fmt.Sprintf("%sAPI base: /api/*%s", bold, reset))
+	log.Println(cyan + "╚══════════════════════════════════════════════════════╝" + reset)
+}
+
+func safeDSN(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "(dsn inválido)"
+	}
+	if u.User != nil {
+		user := u.User.Username()
+		if user != "" {
+			u.User = url.User(user)
+		}
+	}
+	return u.Redacted()
 }

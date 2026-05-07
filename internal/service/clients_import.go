@@ -8,20 +8,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flowpay/flowpay-backend/internal/dberrors"
 	"github.com/flowpay/flowpay-backend/internal/repository"
-	"github.com/go-sql-driver/mysql"
 )
 
 // ErrImportHistoryUnavailable la tabla client_import_batches no existe (migración pendiente).
 var ErrImportHistoryUnavailable = errors.New("import history table missing")
-
-func mysqlErrNum(err error) uint16 {
-	var me *mysql.MySQLError
-	if errors.As(err, &me) {
-		return me.Number
-	}
-	return 0
-}
 
 // ImportDistributorResult resumen de importación planilla FlowPay (formato distribuidor).
 type ImportDistributorResult struct {
@@ -241,8 +233,7 @@ func (s *Service) RecordClientImportBatch(ctx context.Context, companyID int64, 
 func (s *Service) ListClientImportBatches(ctx context.Context, companyID int64) ([]ClientImportBatchListItem, error) {
 	rows, err := s.Repo.ListClientImportBatches(ctx, companyID)
 	if err != nil {
-		// MySQL 1146: tabla no existe (migración SQL pendiente).
-		if mysqlErrNum(err) == 1146 {
+		if dberrors.IsUndefinedTable(err) {
 			return []ClientImportBatchListItem{}, nil
 		}
 		return nil, err
@@ -266,7 +257,7 @@ func (s *Service) ListClientImportBatches(ctx context.Context, companyID int64) 
 func (s *Service) GetClientImportBatch(ctx context.Context, companyID, batchID int64) (*ClientImportBatchDetail, error) {
 	r, err := s.Repo.GetClientImportBatch(ctx, companyID, batchID)
 	if err != nil {
-		if mysqlErrNum(err) == 1146 {
+		if dberrors.IsUndefinedTable(err) {
 			return nil, ErrImportHistoryUnavailable
 		}
 		return nil, err

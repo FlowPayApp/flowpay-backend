@@ -17,7 +17,7 @@ func (r *Repository) FindWhatsAppNumberByTo(ctx context.Context, toNormalized st
 	q := `
 SELECT id, company_id, phone_number, twilio_sid, status, created_at
 FROM whatsapp_numbers
-WHERE LOWER(phone_number) = LOWER(?) AND status = 'active'
+WHERE LOWER(phone_number) = LOWER($1) AND status = 'active'
 LIMIT 1
 `
 	var w models.WhatsAppNumber
@@ -35,7 +35,7 @@ func (r *Repository) FirstActiveWhatsAppToForCompany(ctx context.Context, compan
 	var phone string
 	err := r.db.QueryRowContext(ctx, `
 SELECT phone_number FROM whatsapp_numbers
-WHERE company_id = ? AND status = 'active'
+WHERE company_id = $1 AND status = 'active'
 ORDER BY id ASC LIMIT 1
 `, companyID).Scan(&phone)
 	if err != nil {
@@ -48,7 +48,7 @@ ORDER BY id ASC LIMIT 1
 func (r *Repository) GetMessageByID(ctx context.Context, companyID, msgID int64) (*models.Message, error) {
 	q := `
 SELECT id, company_id, charge_id, from_number, to_number, content, direction, status, created_at
-FROM messages WHERE id = ? AND company_id = ?
+FROM messages WHERE id = $1 AND company_id = $2
 `
 	var m models.Message
 	var charge sql.NullInt64
@@ -69,10 +69,10 @@ FROM messages WHERE id = ? AND company_id = ?
 // Prioriza el cobro creado más recientemente.
 func (r *Repository) FindOpenChargeIDForInboundWhatsApp(ctx context.Context, companyID int64, fromNormalized string) (*int64, error) {
 	q := `
-SELECT ch.id, IFNULL(c.phone, '') AS phone
+SELECT ch.id, COALESCE(c.phone, '') AS phone
 FROM charges ch
 JOIN clients c ON c.id = ch.client_id
-WHERE ch.company_id = ?
+WHERE ch.company_id = $1
   AND ch.paid_at IS NULL
   AND c.phone IS NOT NULL AND TRIM(c.phone) <> ''
 ORDER BY ch.created_at DESC, ch.id DESC
@@ -103,7 +103,7 @@ func (r *Repository) ListInboundMessagesForCharge(ctx context.Context, companyID
 	q := `
 SELECT id, company_id, charge_id, from_number, to_number, content, direction, status, created_at
 FROM messages
-WHERE company_id = ? AND charge_id = ? AND direction = 'inbound'
+WHERE company_id = $1 AND charge_id = $2 AND direction = 'inbound'
 ORDER BY created_at DESC, id DESC
 `
 	rows, err := r.db.QueryContext(ctx, q, companyID, chargeID)
@@ -135,12 +135,13 @@ func (r *Repository) InsertMessage(ctx context.Context, m *models.Message) (int6
 	} else {
 		chargeID = nil
 	}
-	res, err := r.db.ExecContext(ctx,
-		`INSERT INTO messages (company_id, charge_id, from_number, to_number, content, direction, status) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+	var id int64
+	err := r.db.QueryRowContext(ctx,
+		`INSERT INTO messages (company_id, charge_id, from_number, to_number, content, direction, status) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
 		m.CompanyID, chargeID, m.FromNumber, m.ToNumber, m.Content, m.Direction, m.Status,
-	)
+	).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	return id, nil
 }

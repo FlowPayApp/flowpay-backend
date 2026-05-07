@@ -5,34 +5,15 @@ Backend del MVP **FlowPay**: cobranza y seguimiento de **cobros** (montos que te
 ## Requisitos
 
 - Go 1.22+
-- MySQL 8 (local o Docker)
+- PostgreSQL 14+ (local, Docker o p. ej. Supabase)
 
 ## Base de datos
 
-1. Levanta MySQL. Con Docker, desde la carpeta `Mysql`:
+1. Crea la base y el esquema con los scripts en `../Mysql/postgresql_migration/` (`02_schema.sql` y `03_triggers.sql`). En Supabase suele bastar con ejecutarlos sobre la base `postgres` (esquema `public`).
 
-   ```bash
-   docker compose up -d
-   ```
+2. **Legado MySQL:** la carpeta `Mysql/` conserva el esquema y migraciones MySQL por si necesitás exportar datos; el API ya no usa el driver MySQL.
 
-   Esto crea la base `flowpay`, usuario `flowpay` / contraseña `flowpay`, puerto `3306`, y aplica `create_tables.sql` y `seed_data.sql`.
-
-2. Si instalas MySQL a mano, ejecuta en orden:
-
-   ```bash
-   mysql -u root -p < ../Mysql/create_tables.sql
-   mysql -u root -p < ../Mysql/seed_data.sql
-   ```
-
-   Crea el usuario si hace falta:
-
-   ```sql
-   CREATE USER IF NOT EXISTS 'flowpay'@'%' IDENTIFIED BY 'flowpay';
-   GRANT ALL PRIVILEGES ON flowpay.* TO 'flowpay'@'%';
-   FLUSH PRIVILEGES;
-   ```
-
-3. Si tu BD antigua aún tiene la tabla `invoices`, ejecuta **una vez** `../Mysql/migration_rename_invoices_to_charges.sql` antes de alinear el código.
+3. Variable `FLOWPAY_DSN`: URI PostgreSQL, p. ej. `postgres://usuario:clave@host:5432/nombre_bd?sslmode=require` (Supabase casi siempre requiere `sslmode=require` y a veces host del pooler).
 
 ## Variables de entorno
 
@@ -40,7 +21,7 @@ Copia `.env.example` a `.env` y ajusta, o exporta en la terminal:
 
 | Variable | Descripción |
 |----------|-------------|
-| `FLOWPAY_DSN` | DSN MySQL (por defecto usuario `flowpay`, BD `flowpay`) |
+| `FLOWPAY_DSN` | URI PostgreSQL (`postgres://...`) |
 | `FLOWPAY_ADDR` | Dirección HTTP (por defecto `:8080`) |
 | `FLOWPAY_REMINDER_INTERVAL` | Intervalo del job de recordatorios (ej. `24h` o `1m` para pruebas) |
 

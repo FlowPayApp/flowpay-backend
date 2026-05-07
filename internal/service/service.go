@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flowpay/flowpay-backend/internal/dberrors"
 	"github.com/flowpay/flowpay-backend/internal/domain"
 	"github.com/flowpay/flowpay-backend/internal/models"
 	"github.com/flowpay/flowpay-backend/internal/notify"
@@ -118,7 +119,7 @@ func (s *Service) CreateClient(ctx context.Context, companyID int64, in CreateCl
 		strings.TrimSpace(in.PaymentTerms),
 	)
 	if err != nil {
-		if mysqlErrNum(err) == 1062 {
+		if dberrors.IsUniqueViolation(err) {
 			return 0, errors.New("ya existe un cliente con la misma clave de código/sucursal en esta empresa")
 		}
 		return 0, err
@@ -186,7 +187,7 @@ func (s *Service) PatchClient(ctx context.Context, companyID, clientID int64, in
 	}
 	err := s.Repo.PatchClient(ctx, companyID, clientID, patch)
 	if err != nil {
-		if mysqlErrNum(err) == 1062 {
+		if dberrors.IsUniqueViolation(err) {
 			return errors.New("ya existe un cliente con la misma clave de código/sucursal en esta empresa")
 		}
 		return err

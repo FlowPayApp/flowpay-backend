@@ -159,11 +159,11 @@ SELECT c.id, c.company_id, c.name, c.email, c.phone, c.external_code, c.address,
        c.is_active,
        c.followup_channel,
        COALESCE(SUM(CASE WHEN i.paid_at IS NULL THEN i.amount ELSE 0 END), 0),
-       COALESCE(SUM(CASE WHEN i.paid_at IS NULL AND i.due_date < CURDATE() THEN 1 ELSE 0 END), 0),
+       COALESCE(SUM(CASE WHEN i.paid_at IS NULL AND i.due_date < CURRENT_DATE THEN 1 ELSE 0 END), 0),
        COUNT(i.id)
 FROM clients c
 LEFT JOIN charges i ON i.client_id = c.id AND i.company_id = c.company_id
-WHERE c.company_id = ?
+WHERE c.company_id = $1
 GROUP BY c.id, c.company_id, c.name, c.email, c.phone, c.external_code, c.address,
          c.client_code, c.branch_name, c.payment_terms,
          c.created_at, c.is_active, c.followup_channel
@@ -177,7 +177,7 @@ ORDER BY c.created_at DESC, c.id DESC
 	var out []ClientRow
 	for rows.Next() {
 		var cr ClientRow
-		var isActive int
+		var isActive bool
 		var email, phone, extCode, addr sql.NullString
 		var clientCode, branchName, payTerms sql.NullString
 		if err := rows.Scan(
@@ -194,7 +194,7 @@ ORDER BY c.created_at DESC, c.id DESC
 		cr.ClientCode = assignNullString(clientCode)
 		cr.BranchName = assignNullString(branchName)
 		cr.PaymentTerms = assignNullString(payTerms)
-		cr.IsActive = isActive != 0
+		cr.IsActive = isActive
 		if cr.FollowupChannel == "" {
 			cr.FollowupChannel = "all"
 		}
@@ -212,17 +212,17 @@ SELECT c.id, c.company_id, c.name, c.email, c.phone, c.external_code, c.address,
        c.is_active,
        c.followup_channel,
        COALESCE(SUM(CASE WHEN i.paid_at IS NULL THEN i.amount ELSE 0 END), 0),
-       COALESCE(SUM(CASE WHEN i.paid_at IS NULL AND i.due_date < CURDATE() THEN 1 ELSE 0 END), 0),
+       COALESCE(SUM(CASE WHEN i.paid_at IS NULL AND i.due_date < CURRENT_DATE THEN 1 ELSE 0 END), 0),
        COUNT(i.id)
 FROM clients c
 LEFT JOIN charges i ON i.client_id = c.id AND i.company_id = c.company_id
-WHERE c.company_id = ? AND c.id = ?
+WHERE c.company_id = $1 AND c.id = $2
 GROUP BY c.id, c.company_id, c.name, c.email, c.phone, c.external_code, c.address,
          c.client_code, c.branch_name, c.payment_terms,
          c.created_at, c.is_active, c.followup_channel
 `
 	var cr ClientRow
-	var isActive int
+	var isActive bool
 	var email, phone, extCode, addr sql.NullString
 	var clientCode, branchName, payTerms sql.NullString
 	err := r.db.QueryRowContext(ctx, q, companyID, clientID).Scan(
@@ -243,7 +243,7 @@ GROUP BY c.id, c.company_id, c.name, c.email, c.phone, c.external_code, c.addres
 	cr.ClientCode = assignNullString(clientCode)
 	cr.BranchName = assignNullString(branchName)
 	cr.PaymentTerms = assignNullString(payTerms)
-	cr.IsActive = isActive != 0
+	cr.IsActive = isActive
 	if cr.FollowupChannel == "" {
 		cr.FollowupChannel = "all"
 	}
@@ -253,7 +253,7 @@ GROUP BY c.id, c.company_id, c.name, c.email, c.phone, c.external_code, c.addres
 // DeleteClient elimina el cliente; los cobros asociados se eliminan en cascada.
 func (r *Repository) DeleteClient(ctx context.Context, companyID, clientID int64) error {
 	res, err := r.db.ExecContext(ctx,
-		`DELETE FROM clients WHERE id = ? AND company_id = ?`,
+		`DELETE FROM clients WHERE id = $1 AND company_id = $2`,
 		clientID, companyID,
 	)
 	if err != nil {
@@ -283,22 +283,23 @@ func (r *Repository) CreateClient(ctx context.Context, companyID int64, name, em
 	branchName = trimImport(branchName, 255)
 	payTerms = trimImport(payTerms, 64)
 
-	res, err := r.db.ExecContext(ctx,
+	var id int64
+	err := r.db.QueryRowContext(ctx,
 		`INSERT INTO clients (
 			company_id, name, email, phone, external_code, address,
 			client_code, branch_name, payment_terms,
 			is_active, followup_channel
 		) VALUES (
-			?, ?, NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''),
-			NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''),
-			1, 'all'
-		)`,
+			$1, $2, NULLIF($3, ''), NULLIF($4, ''), NULLIF($5, ''),
+			NULLIF($6, ''), NULLIF($7, ''), NULLIF($8, ''),
+			TRUE, 'all'
+		) RETURNING id`,
 		companyID, name, email, phone, extCode, address, clientCode, branchName, payTerms,
-	)
+	).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	return id, nil
 }
 
 func trimImport(s string, max int) string {
@@ -325,16 +326,13 @@ func (r *Repository) UpsertClientImport(ctx context.Context, companyID int64, in
 	cc := trimImport(in.ClientCode, 64)
 	bn := trimImport(in.BranchName, 255)
 	pay := trimImport(in.PaymentTerms, 64)
-	active := 0
-	if in.IsActive {
-		active = 1
-	}
+	active := in.IsActive
 	res, err := r.db.ExecContext(ctx, `
 UPDATE clients SET
-  name = ?, email = NULLIF(?, ''), phone = NULLIF(?, ''), address = NULLIF(?, ''), is_active = ?,
-  client_code = NULLIF(?, ''), branch_name = NULLIF(?, ''),
-  payment_terms = NULLIF(?, '')
-WHERE company_id = ? AND external_code = ?`,
+  name = $1, email = NULLIF($2, ''), phone = NULLIF($3, ''), address = NULLIF($4, ''), is_active = $5,
+  client_code = NULLIF($6, ''), branch_name = NULLIF($7, ''),
+  payment_terms = NULLIF($8, '')
+WHERE company_id = $9 AND external_code = $10`,
 		name, em, phone, addr, active, cc, bn, pay, companyID, ec,
 	)
 	if err != nil {
@@ -353,9 +351,9 @@ INSERT INTO clients (
   client_code, branch_name, payment_terms,
   is_active, followup_channel
 ) VALUES (
-  ?, ?, NULLIF(?, ''), NULLIF(?, ''), ?, NULLIF(?, ''),
-  NULLIF(?, ''), NULLIF(?, ''), NULLIF(?, ''),
-  ?, 'all'
+  $1, $2, NULLIF($3, ''), NULLIF($4, ''), $5, NULLIF($6, ''),
+  NULLIF($7, ''), NULLIF($8, ''), NULLIF($9, ''),
+  $10, 'all'
 )`,
 		companyID, name, em, phone, ec, addr,
 		cc, bn, pay,
@@ -368,13 +366,9 @@ INSERT INTO clients (
 }
 
 func (r *Repository) SetClientActive(ctx context.Context, companyID, clientID int64, isActive bool) error {
-	active := 0
-	if isActive {
-		active = 1
-	}
 	res, err := r.db.ExecContext(ctx,
-		`UPDATE clients SET is_active = ? WHERE id = ? AND company_id = ?`,
-		active, clientID, companyID,
+		`UPDATE clients SET is_active = $1 WHERE id = $2 AND company_id = $3`,
+		isActive, clientID, companyID,
 	)
 	if err != nil {
 		return err
@@ -406,64 +400,73 @@ type ClientPatch struct {
 func (r *Repository) PatchClient(ctx context.Context, companyID, clientID int64, p ClientPatch) error {
 	var sets []string
 	var args []any
+	n := 1
 	if p.IsActive != nil {
-		iv := 0
-		if *p.IsActive {
-			iv = 1
-		}
-		sets = append(sets, "is_active = ?")
-		args = append(args, iv)
+		sets = append(sets, fmt.Sprintf("is_active = $%d", n))
+		args = append(args, *p.IsActive)
+		n++
 	}
 	if p.FollowupChannel != nil {
-		sets = append(sets, "followup_channel = ?")
+		sets = append(sets, fmt.Sprintf("followup_channel = $%d", n))
 		args = append(args, strings.TrimSpace(strings.ToLower(*p.FollowupChannel)))
+		n++
 	}
 	if p.Name != nil {
-		sets = append(sets, "name = ?")
+		sets = append(sets, fmt.Sprintf("name = $%d", n))
 		args = append(args, trimImport(*p.Name, 255))
+		n++
 	}
 	if p.Email != nil {
-		sets = append(sets, "email = NULLIF(?, '')")
+		sets = append(sets, fmt.Sprintf("email = NULLIF($%d::text, '')", n))
 		args = append(args, trimImport(*p.Email, 255))
+		n++
 	}
 	if p.Phone != nil {
-		sets = append(sets, "phone = NULLIF(?, '')")
+		sets = append(sets, fmt.Sprintf("phone = NULLIF($%d::text, '')", n))
 		args = append(args, trimImport(*p.Phone, 64))
+		n++
 	}
 	if p.Address != nil {
-		sets = append(sets, "address = NULLIF(?, '')")
+		sets = append(sets, fmt.Sprintf("address = NULLIF($%d::text, '')", n))
 		args = append(args, trimImport(*p.Address, 512))
+		n++
 	}
 	if p.ClientCode != nil {
-		sets = append(sets, "client_code = NULLIF(?, '')")
+		sets = append(sets, fmt.Sprintf("client_code = NULLIF($%d::text, '')", n))
 		args = append(args, trimImport(*p.ClientCode, 64))
+		n++
 	}
 	if p.BranchName != nil {
-		sets = append(sets, "branch_name = NULLIF(?, '')")
+		sets = append(sets, fmt.Sprintf("branch_name = NULLIF($%d::text, '')", n))
 		args = append(args, trimImport(*p.BranchName, 255))
+		n++
 	}
 	if p.PaymentTerms != nil {
-		sets = append(sets, "payment_terms = NULLIF(?, '')")
+		sets = append(sets, fmt.Sprintf("payment_terms = NULLIF($%d::text, '')", n))
 		args = append(args, trimImport(*p.PaymentTerms, 64))
+		n++
 	}
 	if p.ExternalCode != nil {
-		sets = append(sets, "external_code = NULLIF(?, '')")
+		sets = append(sets, fmt.Sprintf("external_code = NULLIF($%d::text, '')", n))
 		args = append(args, trimImport(*p.ExternalCode, 128))
+		n++
 	}
 	if len(sets) == 0 {
 		return nil
 	}
+	idPH := n
+	compPH := n + 1
 	args = append(args, clientID, companyID)
-	q := fmt.Sprintf("UPDATE clients SET %s WHERE id = ? AND company_id = ?", strings.Join(sets, ", "))
+	q := fmt.Sprintf("UPDATE clients SET %s WHERE id = $%d AND company_id = $%d", strings.Join(sets, ", "), idPH, compPH)
 	res, err := r.db.ExecContext(ctx, q, args...)
 	if err != nil {
 		return err
 	}
-	n, err := res.RowsAffected()
+	aff, err := res.RowsAffected()
 	if err != nil {
 		return err
 	}
-	if n == 0 {
+	if aff == 0 {
 		return sql.ErrNoRows
 	}
 	return nil
@@ -491,7 +494,7 @@ SELECT i.id, i.company_id, i.client_id, i.amount, i.due_date, i.paid_at,
        i.attachment_token, i.attachment_ext, i.created_at, ` + chargeClientLabelExpr + `, c.email, c.phone, c.followup_channel
 FROM charges i
 JOIN clients c ON c.id = i.client_id
-WHERE i.company_id = ?
+WHERE i.company_id = $1
 ORDER BY i.due_date ASC, i.id ASC
 `
 	rows, err := r.db.QueryContext(ctx, q, companyID)
@@ -516,7 +519,7 @@ SELECT i.id, i.company_id, i.client_id, i.amount, i.due_date, i.paid_at,
        i.attachment_token, i.attachment_ext, i.created_at, ` + chargeClientLabelExpr + `, c.email, c.phone, c.followup_channel
 FROM charges i
 JOIN clients c ON c.id = i.client_id
-WHERE i.company_id = ? AND i.id = ?
+WHERE i.company_id = $1 AND i.id = $2
 `
 	var ch Charge
 	var ce, cp, atok, aext sql.NullString
@@ -535,20 +538,21 @@ WHERE i.company_id = ? AND i.id = ?
 }
 
 func (r *Repository) CreateCharge(ctx context.Context, companyID, clientID int64, amount float64, dueDate time.Time) (int64, error) {
-	res, err := r.db.ExecContext(ctx,
-		`INSERT INTO charges (company_id, client_id, amount, due_date) VALUES (?, ?, ?, ?)`,
+	var id int64
+	err := r.db.QueryRowContext(ctx,
+		`INSERT INTO charges (company_id, client_id, amount, due_date) VALUES ($1, $2, $3, $4) RETURNING id`,
 		companyID, clientID, amount, dueDate.Format("2006-01-02"),
-	)
+	).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	return id, nil
 }
 
 // DeleteCharge elimina el cobro; payments y reminders asociados se eliminan en cascada.
 func (r *Repository) DeleteCharge(ctx context.Context, companyID, chargeID int64) error {
 	res, err := r.db.ExecContext(ctx,
-		`DELETE FROM charges WHERE id = ? AND company_id = ?`,
+		`DELETE FROM charges WHERE id = $1 AND company_id = $2`,
 		chargeID, companyID,
 	)
 	if err != nil {
@@ -570,10 +574,10 @@ func (r *Repository) MarkChargePaid(ctx context.Context, chargeID int64, amount 
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO payments (charge_id, amount) VALUES (?, ?)`, chargeID, amount); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO payments (charge_id, amount) VALUES ($1, $2)`, chargeID, amount); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE charges SET paid_at = CURRENT_TIMESTAMP WHERE id = ?`, chargeID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE charges SET paid_at = CURRENT_TIMESTAMP WHERE id = $1`, chargeID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -582,7 +586,7 @@ func (r *Repository) MarkChargePaid(ctx context.Context, chargeID int64, amount 
 func (r *Repository) ListReminders(ctx context.Context, chargeID int64) ([]Reminder, error) {
 	q := `
 SELECT id, charge_id, kind, channel, status, message, created_at, sent_at
-FROM reminders WHERE charge_id = ? ORDER BY created_at ASC, id ASC
+FROM reminders WHERE charge_id = $1 ORDER BY created_at ASC, id ASC
 `
 	rows, err := r.db.QueryContext(ctx, q, chargeID)
 	if err != nil {
@@ -601,14 +605,15 @@ FROM reminders WHERE charge_id = ? ORDER BY created_at ASC, id ASC
 }
 
 func (r *Repository) InsertReminder(ctx context.Context, chargeID int64, kind, channel, status, message string, sentAt *time.Time) (int64, error) {
-	res, err := r.db.ExecContext(ctx,
-		`INSERT INTO reminders (charge_id, kind, channel, status, message, sent_at) VALUES (?, ?, ?, ?, ?, ?)`,
+	var id int64
+	err := r.db.QueryRowContext(ctx,
+		`INSERT INTO reminders (charge_id, kind, channel, status, message, sent_at) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
 		chargeID, kind, channel, status, message, sentAt,
-	)
+	).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	return id, nil
 }
 
 // ChargesDueSoon: no cobrados, due_date entre hoy y hoy+days (inclusive upper bound por día).
@@ -618,10 +623,10 @@ SELECT i.id, i.company_id, i.client_id, i.amount, i.due_date, i.paid_at,
        i.attachment_token, i.attachment_ext, i.created_at, ` + chargeClientLabelExpr + `, c.email, c.phone, c.followup_channel
 FROM charges i
 JOIN clients c ON c.id = i.client_id
-WHERE i.company_id = ?
+WHERE i.company_id = $1
   AND i.paid_at IS NULL
-  AND i.due_date >= CURDATE()
-  AND i.due_date <= DATE_ADD(CURDATE(), INTERVAL ? DAY)
+  AND i.due_date >= CURRENT_DATE
+  AND i.due_date <= CURRENT_DATE + ($2::int * interval '1 day')
 ORDER BY i.due_date
 `
 	return r.queryCharges(ctx, q, companyID, days)
@@ -633,9 +638,9 @@ SELECT i.id, i.company_id, i.client_id, i.amount, i.due_date, i.paid_at,
        i.attachment_token, i.attachment_ext, i.created_at, ` + chargeClientLabelExpr + `, c.email, c.phone, c.followup_channel
 FROM charges i
 JOIN clients c ON c.id = i.client_id
-WHERE i.company_id = ?
+WHERE i.company_id = $1
   AND i.paid_at IS NULL
-  AND i.due_date < CURDATE()
+  AND i.due_date < CURRENT_DATE
 ORDER BY i.due_date
 `
 	return r.queryCharges(ctx, q, companyID)
@@ -661,8 +666,8 @@ func (r *Repository) queryCharges(ctx context.Context, query string, args ...any
 func (r *Repository) CountRecentReminders(ctx context.Context, chargeID int64, kind string, within time.Duration) (int, error) {
 	var n int
 	err := r.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM reminders WHERE charge_id = ? AND kind = ? AND created_at > DATE_SUB(NOW(), INTERVAL ? SECOND)`,
-		chargeID, kind, int(within.Seconds()),
+		`SELECT COUNT(*) FROM reminders WHERE charge_id = $1 AND kind = $2 AND created_at > NOW() - ($3::bigint * interval '1 second')`,
+		chargeID, kind, int64(within.Seconds()),
 	).Scan(&n)
 	return n, err
 }
@@ -671,7 +676,7 @@ func (r *Repository) CountRecentReminders(ctx context.Context, chargeID int64, k
 func (r *Repository) CountRemindersByKind(ctx context.Context, chargeID int64, kind string) (int, error) {
 	var n int
 	err := r.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM reminders WHERE charge_id = ? AND kind = ?`,
+		`SELECT COUNT(*) FROM reminders WHERE charge_id = $1 AND kind = $2`,
 		chargeID, kind,
 	).Scan(&n)
 	return n, err
@@ -680,7 +685,7 @@ func (r *Repository) CountRemindersByKind(ctx context.Context, chargeID int64, k
 // SetChargeAttachment guarda token y extensión del archivo (sin punto).
 func (r *Repository) SetChargeAttachment(ctx context.Context, companyID, chargeID int64, token, ext string) error {
 	res, err := r.db.ExecContext(ctx,
-		`UPDATE charges SET attachment_token = ?, attachment_ext = ? WHERE id = ? AND company_id = ?`,
+		`UPDATE charges SET attachment_token = $1, attachment_ext = $2 WHERE id = $3 AND company_id = $4`,
 		token, ext, chargeID, companyID,
 	)
 	if err != nil {
@@ -700,7 +705,7 @@ func (r *Repository) SetChargeAttachment(ctx context.Context, companyID, chargeI
 func (r *Repository) GetAttachmentExtByToken(ctx context.Context, token string) (string, error) {
 	var ext sql.NullString
 	err := r.db.QueryRowContext(ctx,
-		`SELECT attachment_ext FROM charges WHERE attachment_token = ? AND attachment_token IS NOT NULL`,
+		`SELECT attachment_ext FROM charges WHERE attachment_token = $1 AND attachment_token IS NOT NULL`,
 		token,
 	).Scan(&ext)
 	if err != nil {
@@ -716,7 +721,7 @@ func (r *Repository) GetAttachmentExtByToken(ctx context.Context, token string) 
 func (r *Repository) ClientBelongsToCompany(ctx context.Context, companyID, clientID int64) (bool, error) {
 	var one int
 	err := r.db.QueryRowContext(ctx,
-		`SELECT 1 FROM clients WHERE id = ? AND company_id = ? LIMIT 1`,
+		`SELECT 1 FROM clients WHERE id = $1 AND company_id = $2 LIMIT 1`,
 		clientID, companyID,
 	).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -731,7 +736,7 @@ func (r *Repository) ClientBelongsToCompany(ctx context.Context, companyID, clie
 func (r *Repository) ActiveClientBelongsToCompany(ctx context.Context, companyID, clientID int64) (bool, error) {
 	var one int
 	err := r.db.QueryRowContext(ctx,
-		`SELECT 1 FROM clients WHERE id = ? AND company_id = ? AND is_active = 1 LIMIT 1`,
+		`SELECT 1 FROM clients WHERE id = $1 AND company_id = $2 AND is_active = TRUE LIMIT 1`,
 		clientID, companyID,
 	).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -747,30 +752,36 @@ func (r *Repository) ActiveClientBelongsToCompany(ctx context.Context, companyID
 func (r *Repository) UpdateChargeFields(ctx context.Context, companyID, chargeID int64, clientID *int64, dueDate *time.Time, amount *float64) error {
 	var sets []string
 	var args []any
+	n := 1
 	if clientID != nil {
-		sets = append(sets, "client_id = ?")
+		sets = append(sets, fmt.Sprintf("client_id = $%d", n))
 		args = append(args, *clientID)
+		n++
 	}
 	if dueDate != nil {
-		sets = append(sets, "due_date = ?")
+		sets = append(sets, fmt.Sprintf("due_date = $%d", n))
 		args = append(args, dueDate.Format("2006-01-02"))
+		n++
 	}
 	if amount != nil {
-		sets = append(sets, "amount = ?")
+		sets = append(sets, fmt.Sprintf("amount = $%d", n))
 		args = append(args, *amount)
+		n++
 	}
 	if len(sets) == 0 {
 		return nil
 	}
 	var one int
 	if err := r.db.QueryRowContext(ctx,
-		`SELECT 1 FROM charges WHERE id = ? AND company_id = ? LIMIT 1`,
+		`SELECT 1 FROM charges WHERE id = $1 AND company_id = $2 LIMIT 1`,
 		chargeID, companyID,
 	).Scan(&one); err != nil {
 		return err
 	}
+	idPH := n
+	coPH := n + 1
 	args = append(args, chargeID, companyID)
-	q := fmt.Sprintf("UPDATE charges SET %s WHERE id = ? AND company_id = ?", strings.Join(sets, ", "))
+	q := fmt.Sprintf("UPDATE charges SET %s WHERE id = $%d AND company_id = $%d", strings.Join(sets, ", "), idPH, coPH)
 	_, err := r.db.ExecContext(ctx, q, args...)
 	return err
 }
@@ -782,10 +793,10 @@ func (r *Repository) ClearChargePayment(ctx context.Context, companyID, chargeID
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `DELETE FROM payments WHERE charge_id = ?`, chargeID); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM payments WHERE charge_id = $1`, chargeID); err != nil {
 		return err
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE charges SET paid_at = NULL WHERE id = ? AND company_id = ?`, chargeID, companyID)
+	res, err := tx.ExecContext(ctx, `UPDATE charges SET paid_at = NULL WHERE id = $1 AND company_id = $2`, chargeID, companyID)
 	if err != nil {
 		return err
 	}
@@ -805,12 +816,12 @@ func (r *Repository) DashboardAggregate(ctx context.Context, companyID int64) (D
 SELECT
   COALESCE(SUM(CASE WHEN paid_at IS NOT NULL THEN amount ELSE 0 END), 0),
   COALESCE(SUM(CASE WHEN paid_at IS NOT NULL THEN 1 ELSE 0 END), 0),
-  COALESCE(SUM(CASE WHEN paid_at IS NULL AND due_date >= CURDATE() THEN amount ELSE 0 END), 0),
-  COALESCE(SUM(CASE WHEN paid_at IS NULL AND due_date >= CURDATE() THEN 1 ELSE 0 END), 0),
-  COALESCE(SUM(CASE WHEN paid_at IS NULL AND due_date < CURDATE() THEN amount ELSE 0 END), 0),
-  COALESCE(SUM(CASE WHEN paid_at IS NULL AND due_date < CURDATE() THEN 1 ELSE 0 END), 0)
+  COALESCE(SUM(CASE WHEN paid_at IS NULL AND due_date >= CURRENT_DATE THEN amount ELSE 0 END), 0),
+  COALESCE(SUM(CASE WHEN paid_at IS NULL AND due_date >= CURRENT_DATE THEN 1 ELSE 0 END), 0),
+  COALESCE(SUM(CASE WHEN paid_at IS NULL AND due_date < CURRENT_DATE THEN amount ELSE 0 END), 0),
+  COALESCE(SUM(CASE WHEN paid_at IS NULL AND due_date < CURRENT_DATE THEN 1 ELSE 0 END), 0)
 FROM charges
-WHERE company_id = ?
+WHERE company_id = $1
 `
 	err := r.db.QueryRowContext(ctx, q, companyID).Scan(
 		&t.PaidAmount, &t.PaidCount,
@@ -836,14 +847,14 @@ SELECT
     FROM charges ch
     WHERE ch.company_id = c.id
       AND ch.paid_at IS NULL
-      AND ch.due_date >= CURDATE()
+      AND ch.due_date >= CURRENT_DATE
   ) AS pending_amount,
   (
     SELECT COALESCE(SUM(ch.amount), 0)
     FROM charges ch
     WHERE ch.company_id = c.id
       AND ch.paid_at IS NULL
-      AND ch.due_date < CURDATE()
+      AND ch.due_date < CURRENT_DATE
   ) AS overdue_amount
 FROM companies c
 ORDER BY c.id ASC
@@ -890,15 +901,16 @@ func (r *Repository) InsertClientImportBatch(ctx context.Context, companyID int6
 	if len(errorsJSON) > 0 {
 		errBlob = errorsJSON
 	}
-	res, err := r.db.ExecContext(ctx, `
+	var id int64
+	err := r.db.QueryRowContext(ctx, `
 INSERT INTO client_import_batches (company_id, user_id, source, filename, created_count, updated_count, error_count, errors_json)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
 		companyID, uid, source, fnArg, createdCount, updatedCount, errorCount, errBlob,
-	)
+	).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	return id, nil
 }
 
 // ListClientImportBatches listado reciente por empresa (sin cuerpo de errores).
@@ -906,9 +918,9 @@ func (r *Repository) ListClientImportBatches(ctx context.Context, companyID int6
 	q := `
 SELECT id, company_id, user_id, source, filename, created_at, created_count, updated_count, error_count
 FROM client_import_batches
-WHERE company_id = ?
+WHERE company_id = $1
 ORDER BY created_at DESC, id DESC
-LIMIT ?`
+LIMIT $2`
 	rows, err := r.db.QueryContext(ctx, q, companyID, clientImportBatchListLimit)
 	if err != nil {
 		return nil, err
@@ -937,12 +949,12 @@ func (r *Repository) GetClientImportBatch(ctx context.Context, companyID, batchI
 	q := `
 SELECT id, company_id, user_id, source, filename, created_at, created_count, updated_count, error_count, errors_json
 FROM client_import_batches
-WHERE company_id = ? AND id = ?
+WHERE company_id = $1 AND id = $2
 LIMIT 1`
 	var b ClientImportBatchRow
 	var uid sql.NullInt64
 	var fn sql.NullString
-	var errJSON sql.NullString
+	var errJSON []byte
 	err := r.db.QueryRowContext(ctx, q, companyID, batchID).Scan(
 		&b.ID, &b.CompanyID, &uid, &b.Source, &fn, &b.CreatedAt, &b.CreatedCount, &b.UpdatedCount, &b.ErrorCount, &errJSON,
 	)
@@ -954,8 +966,8 @@ LIMIT 1`
 		b.UserID = &v
 	}
 	b.Filename = assignNullString(fn)
-	if errJSON.Valid {
-		s := errJSON.String
+	if len(errJSON) > 0 {
+		s := string(errJSON)
 		b.ErrorsJSON = &s
 	}
 	return &b, nil

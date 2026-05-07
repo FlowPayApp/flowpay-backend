@@ -29,8 +29,8 @@ func envBool(key string) bool {
 func Load() Config {
 	dsn := os.Getenv("FLOWPAY_DSN")
 	if dsn == "" {
-		// clientFoundRows: RowsAffected refleja filas coincidentes, no solo modificadas (útil en UPDATE).
-		dsn = "flowpay:flowpay@tcp(127.0.0.1:3306)/flowpay?parseTime=true&loc=Local&clientFoundRows=true"
+		// PostgreSQL local (ajustar usuario/clave/BD). Supabase: sslmode=require en la URL.
+		dsn = "postgres://flowpay:flowpay@127.0.0.1:5432/flowpay?sslmode=disable"
 	}
 	addr := os.Getenv("FLOWPAY_ADDR")
 	if addr == "" {

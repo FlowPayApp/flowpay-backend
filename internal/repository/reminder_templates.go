@@ -19,9 +19,9 @@ type ReminderTemplateRow struct {
 
 func (r *Repository) ListReminderTemplates(ctx context.Context, companyID int64) ([]ReminderTemplateRow, error) {
 	rows, err := r.db.QueryContext(ctx, `
-SELECT id, company_id, phase, day_min, day_max, sort_order, IFNULL(email_subject,''), body
+SELECT id, company_id, phase, day_min, day_max, sort_order, COALESCE(email_subject,''), body
 FROM company_reminder_templates
-WHERE company_id = ?
+WHERE company_id = $1
 ORDER BY phase ASC, sort_order ASC, day_min ASC, id ASC
 `, companyID)
 	if err != nil {
@@ -46,7 +46,7 @@ func (r *Repository) ReplaceReminderTemplates(ctx context.Context, companyID int
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `DELETE FROM company_reminder_templates WHERE company_id = ?`, companyID); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM company_reminder_templates WHERE company_id = $1`, companyID); err != nil {
 		return err
 	}
 	for _, t := range list {
@@ -56,7 +56,7 @@ func (r *Repository) ReplaceReminderTemplates(ctx context.Context, companyID int
 		}
 		if _, err := tx.ExecContext(ctx, `
 INSERT INTO company_reminder_templates (company_id, phase, day_min, day_max, sort_order, email_subject, body)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 `, companyID, ph, t.DayMin, t.DayMax, t.SortOrder, strings.TrimSpace(t.EmailSubject), t.Body); err != nil {
 			return err
 		}
