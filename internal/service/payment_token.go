@@ -2,8 +2,12 @@ package service
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -37,27 +41,25 @@ func (s *Service) IssuePaymentToken(ctx context.Context, companyID, clientID int
 	return s.Repo.InsertPaymentToken(ctx, companyID, clientID, tok, PaymentTokenStatusIssued)
 }
 
-// PaymentPortalCompany identifica a la empresa que cobra en la página pública.
+// PaymentPortalCompany datos visibles de la empresa que cobra; NO incluye IDs internos.
 type PaymentPortalCompany struct {
-	ID                   int64  `json:"id"`
 	Name                 string `json:"name"`
 	TransferInstructions string `json:"transfer_instructions,omitempty"`
 }
 
-// PaymentPortalClient identifica al cliente al que está dirigida la página.
+// PaymentPortalClient datos visibles del cliente; NO incluye IDs internos.
 type PaymentPortalClient struct {
-	ID    int64  `json:"id"`
 	Label string `json:"label"`
 }
 
 // PaymentPortalResponse payload del endpoint público /api/public/pay/:token.
 type PaymentPortalResponse struct {
-	TokenStatus string                `json:"token_status"`
-	IssuedAt    time.Time             `json:"issued_at"`
-	Company     PaymentPortalCompany  `json:"company"`
-	Client      PaymentPortalClient   `json:"client"`
-	Charges     []ChargeDTO           `json:"charges"`
-	Totals      PaymentPortalTotals   `json:"totals"`
+	TokenStatus string               `json:"token_status"`
+	IssuedAt    time.Time            `json:"issued_at"`
+	Company     PaymentPortalCompany `json:"company"`
+	Client      PaymentPortalClient  `json:"client"`
+	Charges     []PortalCharge       `json:"charges"`
+	Totals      PaymentPortalTotals  `json:"totals"`
 }
 
 // PaymentPortalTotals montos sumarizados de la cartola del cliente.
@@ -100,19 +102,24 @@ func (s *Service) ResolvePaymentToken(ctx context.Context, tokenValue string) (*
 		TokenStatus: row.Status,
 		IssuedAt:    row.CreatedAt,
 		Company: PaymentPortalCompany{
-			ID:                   row.CompanyID,
 			Name:                 cm.Name,
 			TransferInstructions: cm.TransferInstructions,
 		},
 		Client: PaymentPortalClient{
-			ID:    row.ClientID,
 			Label: label,
 		},
-		Charges: make([]ChargeDTO, 0, len(charges)),
+		Charges: make([]PortalCharge, 0, len(charges)),
 	}
 	for _, ch := range charges {
 		dto := s.withStatus(ch)
-		out.Charges = append(out.Charges, dto)
+		pc := PortalCharge{
+			Ref:             encodePortalChargeRef(row.Token, ch.ID),
+			Amount:          ch.Amount,
+			DueDate:         ch.DueDate,
+			Status:          dto.Status,
+			AttachmentToken: ch.AttachmentToken,
+		}
+		out.Charges = append(out.Charges, pc)
 		switch dto.Status {
 		case "paid":
 			out.Totals.Paid += ch.Amount
@@ -123,4 +130,22 @@ func (s *Service) ResolvePaymentToken(ctx context.Context, tokenValue string) (*
 		}
 	}
 	return out, nil
+}
+
+// PortalCharge representación pública de un cobro: sin IDs de DB, sólo una ref opaca por token.
+type PortalCharge struct {
+	Ref             string    `json:"ref"`
+	Amount          float64   `json:"amount"`
+	DueDate         time.Time `json:"due_date"`
+	Status          string    `json:"status"`
+	AttachmentToken *string   `json:"attachment_token,omitempty"`
+}
+
+// encodePortalChargeRef genera una referencia estable por (token, chargeID) sin revelar el id de DB.
+// Usa HMAC-SHA256 truncado y base64url. La estabilidad depende del par token+chargeID, no de un secreto global.
+func encodePortalChargeRef(tokenValue string, chargeID int64) string {
+	mac := hmac.New(sha256.New, []byte(tokenValue))
+	mac.Write([]byte(strconv.FormatInt(chargeID, 10)))
+	sum := mac.Sum(nil)
+	return base64.RawURLEncoding.EncodeToString(sum[:12])
 }
