@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flowpay/flowpay-backend/internal/dberrors"
 	"github.com/flowpay/flowpay-backend/internal/domain"
 	"github.com/flowpay/flowpay-backend/internal/models"
 	"github.com/flowpay/flowpay-backend/internal/notify"
@@ -19,11 +18,6 @@ import (
 type ChargeDTO struct {
 	repository.Charge
 	Status string `json:"status"`
-}
-
-type ClientDTO struct {
-	repository.ClientRow
-	RiskLevel string `json:"risk_level"`
 }
 
 type DashboardResponse struct {
@@ -51,148 +45,6 @@ type Service struct {
 func (s *Service) withStatus(ch repository.Charge) ChargeDTO {
 	st := domain.ChargeStatus(ch.PaidAt, ch.DueDate, time.Now())
 	return ChargeDTO{Charge: ch, Status: st}
-}
-
-func (s *Service) ListClients(ctx context.Context, companyID int64) ([]ClientDTO, error) {
-	rows, err := s.Repo.ListClients(ctx, companyID)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]ClientDTO, 0, len(rows))
-	for _, r := range rows {
-		atRisk := 0.0
-		if r.OverdueCnt > 0 {
-			atRisk = r.TotalOwed
-		}
-		out = append(out, ClientDTO{
-			ClientRow: r,
-			RiskLevel: domain.RiskLevel(r.OverdueCnt, atRisk),
-		})
-	}
-	return out, nil
-}
-
-func (s *Service) GetClient(ctx context.Context, companyID, clientID int64) (*ClientDTO, error) {
-	row, err := s.Repo.GetClient(ctx, companyID, clientID)
-	if err != nil {
-		return nil, err
-	}
-	atRisk := 0.0
-	if row.OverdueCnt > 0 {
-		atRisk = row.TotalOwed
-	}
-	return &ClientDTO{
-		ClientRow: *row,
-		RiskLevel: domain.RiskLevel(row.OverdueCnt, atRisk),
-	}, nil
-}
-
-func (s *Service) DeleteClient(ctx context.Context, companyID, clientID int64) error {
-	return s.Repo.DeleteClient(ctx, companyID, clientID)
-}
-
-// CreateClientInput datos para alta manual (misma semántica que columnas de la planilla Excel).
-type CreateClientInput struct {
-	Name          string
-	Email         string
-	Phone         string
-	Address       string
-	ClientCode    string
-	BranchName    string
-	PaymentTerms  string
-}
-
-func (s *Service) CreateClient(ctx context.Context, companyID int64, in CreateClientInput) (int64, error) {
-	name := strings.TrimSpace(in.Name)
-	if name == "" {
-		return 0, errors.New("el nombre del encargado (NOMBRE) es obligatorio")
-	}
-	ext := buildExternalCode(in.BranchName, in.ClientCode)
-	id, err := s.Repo.CreateClient(ctx, companyID,
-		name,
-		strings.TrimSpace(in.Email),
-		strings.TrimSpace(in.Phone),
-		ext,
-		strings.TrimSpace(in.Address),
-		strings.TrimSpace(in.ClientCode),
-		strings.TrimSpace(in.BranchName),
-		strings.TrimSpace(in.PaymentTerms),
-	)
-	if err != nil {
-		if dberrors.IsUniqueViolation(err) {
-			return 0, errors.New("ya existe un cliente con la misma clave de código/sucursal en esta empresa")
-		}
-		return 0, err
-	}
-	return id, nil
-}
-
-func (s *Service) SetClientActive(ctx context.Context, companyID, clientID int64, isActive bool) error {
-	return s.Repo.SetClientActive(ctx, companyID, clientID, isActive)
-}
-
-func validFollowupChannel(ch string) bool {
-	switch ch {
-	case "none", "email", "whatsapp", "all":
-		return true
-	default:
-		return false
-	}
-}
-
-// PatchClientInput actualización parcial vía PATCH (activo, seguimiento y/o datos de ficha).
-type PatchClientInput struct {
-	IsActive        *bool
-	FollowupChannel *string
-	Name            *string
-	Email           *string
-	Phone           *string
-	Address         *string
-	ClientCode      *string
-	BranchName      *string
-	PaymentTerms    *string
-}
-
-func (s *Service) PatchClient(ctx context.Context, companyID, clientID int64, in PatchClientInput) error {
-	var follow *string
-	if in.FollowupChannel != nil {
-		v := strings.TrimSpace(strings.ToLower(*in.FollowupChannel))
-		if !validFollowupChannel(v) {
-			return errors.New("followup_channel inválido (none|email|whatsapp|all)")
-		}
-		follow = &v
-	}
-	patch := repository.ClientPatch{
-		IsActive:        in.IsActive,
-		FollowupChannel: follow,
-	}
-	profile := in.Name != nil || in.Email != nil || in.Phone != nil || in.Address != nil ||
-		in.ClientCode != nil || in.BranchName != nil || in.PaymentTerms != nil
-	if profile {
-		if in.Name == nil || strings.TrimSpace(*in.Name) == "" {
-			return errors.New("el nombre del encargado (NOMBRE) es obligatorio")
-		}
-		if in.ClientCode == nil || in.BranchName == nil {
-			return errors.New("código y sucursal son obligatorios al actualizar los datos del cliente")
-		}
-		ext := buildExternalCode(*in.BranchName, *in.ClientCode)
-		patch.Name = in.Name
-		patch.Email = in.Email
-		patch.Phone = in.Phone
-		patch.Address = in.Address
-		patch.ClientCode = in.ClientCode
-		patch.BranchName = in.BranchName
-		patch.PaymentTerms = in.PaymentTerms
-		patch.ExternalCode = &ext
-	}
-	err := s.Repo.PatchClient(ctx, companyID, clientID, patch)
-	if err != nil {
-		if dberrors.IsUniqueViolation(err) {
-			return errors.New("ya existe un cliente con la misma clave de código/sucursal en esta empresa")
-		}
-		return err
-	}
-	return nil
 }
 
 func (s *Service) ListCharges(ctx context.Context, companyID int64) ([]ChargeDTO, error) {

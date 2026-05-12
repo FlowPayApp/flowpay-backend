@@ -37,16 +37,6 @@ func (h *HTTP) companyID(c *gin.Context) int64 {
 	return h.DefaultCompany
 }
 
-// jwtUserID usuario JWT actual (nil si no hay claim).
-func (h *HTTP) jwtUserID(c *gin.Context) *int64 {
-	if v, ok := c.Get("user_id"); ok {
-		if id, ok := v.(int64); ok && id != 0 {
-			return &id
-		}
-	}
-	return nil
-}
-
 func (h *HTTP) Register(r *gin.Engine, jwtMiddleware gin.HandlerFunc) {
 	r.GET("/api/public/attachments/:token", h.publicAttachment)
 	r.POST("/api/webhooks/twilio/whatsapp", h.twilioWhatsAppWebhook)
@@ -54,14 +44,6 @@ func (h *HTTP) Register(r *gin.Engine, jwtMiddleware gin.HandlerFunc) {
 	api := r.Group("/api")
 	api.Use(jwtMiddleware)
 	{
-		api.GET("/clients", h.listClients)
-		api.POST("/clients", h.createClient)
-		api.PATCH("/clients/:id", h.patchClient)
-		api.POST("/clients/import-distributor-rows", h.clientsImportDistributorRows)
-		api.GET("/clients/import-batches", h.listClientImportBatches)
-		api.GET("/clients/import-batches/:id", h.getClientImportBatch)
-		api.GET("/clients/:id", h.getClient)
-		api.DELETE("/clients/:id", h.deleteClient)
 		api.GET("/charges", h.listCharges)
 		api.POST("/charges", h.createCharge)
 		api.GET("/charges/:id", h.getCharge)
@@ -93,136 +75,6 @@ func (h *HTTP) isPlatformAdmin(c *gin.Context) bool {
 		return false
 	}
 	return strings.TrimSpace(strings.ToLower(role)) == "platform_admin"
-}
-
-func (h *HTTP) listClients(c *gin.Context) {
-	list, err := h.Svc.ListClients(c.Request.Context(), h.companyID(c))
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, list)
-}
-
-type createClientBody struct {
-	Name         string `json:"name"`
-	Email        string `json:"email"`
-	Phone        string `json:"phone"`
-	Address      string `json:"address"`
-	ClientCode   string `json:"client_code"`
-	BranchName   string `json:"branch_name"`
-	PaymentTerms string `json:"payment_terms"`
-}
-
-type patchClientBody struct {
-	IsActive        *bool   `json:"is_active"`
-	FollowupChannel *string `json:"followup_channel"`
-	Name            *string `json:"name"`
-	Email           *string `json:"email"`
-	Phone           *string `json:"phone"`
-	Address         *string `json:"address"`
-	ClientCode      *string `json:"client_code"`
-	BranchName      *string `json:"branch_name"`
-	PaymentTerms    *string `json:"payment_terms"`
-}
-
-func (b patchClientBody) hasPatchFields() bool {
-	return b.IsActive != nil || b.FollowupChannel != nil ||
-		b.Name != nil || b.Email != nil || b.Phone != nil || b.Address != nil ||
-		b.ClientCode != nil || b.BranchName != nil || b.PaymentTerms != nil
-}
-
-func (h *HTTP) createClient(c *gin.Context) {
-	var body createClientBody
-	if err := c.ShouldBindJSON(&body); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json"})
-		return
-	}
-	id, err := h.Svc.CreateClient(c.Request.Context(), h.companyID(c), service.CreateClientInput{
-		Name:         body.Name,
-		Email:        body.Email,
-		Phone:        body.Phone,
-		Address:      body.Address,
-		ClientCode:   body.ClientCode,
-		BranchName:   body.BranchName,
-		PaymentTerms: body.PaymentTerms,
-	})
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusCreated, gin.H{"id": id})
-}
-
-func (h *HTTP) patchClient(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "bad id"})
-		return
-	}
-	var body patchClientBody
-	if err := c.ShouldBindJSON(&body); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json"})
-		return
-	}
-	if !body.hasPatchFields() {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "indica al menos un campo para actualizar"})
-		return
-	}
-	if err := h.Svc.PatchClient(c.Request.Context(), h.companyID(c), id, service.PatchClientInput{
-		IsActive:        body.IsActive,
-		FollowupChannel: body.FollowupChannel,
-		Name:            body.Name,
-		Email:           body.Email,
-		Phone:           body.Phone,
-		Address:         body.Address,
-		ClientCode:      body.ClientCode,
-		BranchName:      body.BranchName,
-		PaymentTerms:    body.PaymentTerms,
-	}); err != nil {
-		if service.ErrNotFound(err) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
-			return
-		}
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"ok": true})
-}
-
-func (h *HTTP) getClient(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "bad id"})
-		return
-	}
-	dto, err := h.Svc.GetClient(c.Request.Context(), h.companyID(c), id)
-	if err != nil {
-		if service.ErrNotFound(err) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, dto)
-}
-
-func (h *HTTP) deleteClient(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "bad id"})
-		return
-	}
-	if err := h.Svc.DeleteClient(c.Request.Context(), h.companyID(c), id); err != nil {
-		if service.ErrNotFound(err) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
-			return
-		}
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 func (h *HTTP) listCharges(c *gin.Context) {
