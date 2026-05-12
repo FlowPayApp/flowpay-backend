@@ -39,6 +39,7 @@ func (h *HTTP) companyID(c *gin.Context) int64 {
 
 func (h *HTTP) Register(r *gin.Engine, jwtMiddleware gin.HandlerFunc) {
 	r.GET("/api/public/attachments/:token", h.publicAttachment)
+	r.GET("/api/public/pay/:token", h.publicPaymentPortal)
 	r.POST("/api/webhooks/twilio/whatsapp", h.twilioWhatsAppWebhook)
 
 	api := r.Group("/api")
@@ -59,6 +60,7 @@ func (h *HTTP) Register(r *gin.Engine, jwtMiddleware gin.HandlerFunc) {
 		api.GET("/platform/overview", h.platformOverview)
 		api.GET("/company/messaging", h.getCompanyMessaging)
 		api.PUT("/company/messaging", h.putCompanyMessaging)
+		api.POST("/payment-tokens", h.createPaymentToken)
 	}
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -222,6 +224,37 @@ func (h *HTTP) simulateChargeInboundWhatsApp(c *gin.Context) {
 	c.JSON(http.StatusOK, m)
 }
 
+type createPaymentTokenBody struct {
+	ClientID  int64 `json:"client_id"`
+	CompanyID int64 `json:"company_id"`
+}
+
+func (h *HTTP) createPaymentToken(c *gin.Context) {
+	var body createPaymentTokenBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json"})
+		return
+	}
+	companyID := body.CompanyID
+	if h.JWTSecret != "" {
+		claimCompany := h.companyID(c)
+		if companyID == 0 {
+			companyID = claimCompany
+		} else if companyID != claimCompany {
+			c.JSON(http.StatusForbidden, gin.H{"error": "company_id no coincide con el token de sesión"})
+			return
+		}
+	} else if companyID == 0 {
+		companyID = h.companyID(c)
+	}
+	row, err := h.Svc.IssuePaymentToken(c.Request.Context(), companyID, body.ClientID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, row)
+}
+
 func (h *HTTP) getCompanyMessaging(c *gin.Context) {
 	out, err := h.Svc.GetCompanyMessagingSettings(c.Request.Context(), h.companyID(c))
 	if err != nil {
@@ -324,6 +357,20 @@ func (h *HTTP) uploadChargeAttachment(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (h *HTTP) publicPaymentPortal(c *gin.Context) {
+	token := c.Param("token")
+	out, err := h.Svc.ResolvePaymentToken(c.Request.Context(), token)
+	if err != nil {
+		if errors.Is(err, service.ErrPaymentTokenNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "token no encontrado"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 func (h *HTTP) publicAttachment(c *gin.Context) {
