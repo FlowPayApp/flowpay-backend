@@ -51,3 +51,23 @@ LIMIT 1
 func ErrPaymentTokenNotFound(err error) bool {
 	return err == sql.ErrNoRows
 }
+
+// MarkPaymentTokenViewed pasa el token de 'issued' a 'viewed'.
+// Solo aplica si está en 'issued' (no degrada estados posteriores como 'paid' o 'revoked').
+// Devuelve true si efectivamente cambió.
+func (r *Repository) MarkPaymentTokenViewed(ctx context.Context, token string) (bool, error) {
+	res, err := r.db.ExecContext(ctx, `
+UPDATE payment_tokens
+SET status = 'viewed'::payment_token_status
+WHERE trim(both from token) = trim(both from $1::text)
+  AND status = 'issued'::payment_token_status
+`, token)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}

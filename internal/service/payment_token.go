@@ -15,8 +15,13 @@ import (
 	"github.com/flowpay/flowpay-backend/internal/repository"
 )
 
-// Estado inicial de un token de pago recién emitido.
-const PaymentTokenStatusIssued = "issued"
+// Estados del ENUM public.payment_token_status en PostgreSQL.
+const (
+	PaymentTokenStatusIssued  = "issued"
+	PaymentTokenStatusViewed  = "viewed"
+	PaymentTokenStatusPaid    = "paid"
+	PaymentTokenStatusRevoked = "revoked"
+)
 
 // ErrPaymentTokenNotFound indica que el token no existe (o fue revocado).
 var ErrPaymentTokenNotFound = errors.New("token de pago no encontrado")
@@ -81,6 +86,11 @@ func (s *Service) ResolvePaymentToken(ctx context.Context, tokenValue string) (*
 			return nil, ErrPaymentTokenNotFound
 		}
 		return nil, err
+	}
+	if row.Status == PaymentTokenStatusIssued {
+		if changed, mErr := s.Repo.MarkPaymentTokenViewed(ctx, row.Token); mErr == nil && changed {
+			row.Status = PaymentTokenStatusViewed
+		}
 	}
 	cm, err := s.Repo.GetCompanyMessaging(ctx, row.CompanyID)
 	if err != nil {
