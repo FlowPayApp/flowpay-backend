@@ -21,12 +21,12 @@ import (
 
 	"github.com/flowpay/flowpay-backend/internal/config"
 	"github.com/flowpay/flowpay-backend/internal/handler"
-	"github.com/flowpay/flowpay-backend/internal/transbank"
 	"github.com/flowpay/flowpay-backend/internal/jobs"
 	"github.com/flowpay/flowpay-backend/internal/middleware"
 	"github.com/flowpay/flowpay-backend/internal/repository"
 	"github.com/flowpay/flowpay-backend/internal/service"
 	"github.com/flowpay/flowpay-backend/internal/services"
+	"github.com/flowpay/flowpay-backend/internal/transbank"
 )
 
 func main() {
@@ -177,3 +177,5 @@ func safeDSN(raw string) string {
 	}
 	return u.Redacted()
 }
+
+// console log para debug
