@@ -40,6 +40,7 @@ type Service struct {
 	Repo      *repository.Repository
 	Notify    *notify.Dispatcher
 	UploadDir string
+	Webpay    *WebpayDeps
 }
 
 func (s *Service) withStatus(ch repository.Charge) ChargeDTO {

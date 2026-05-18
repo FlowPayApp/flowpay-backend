@@ -40,6 +40,11 @@ func (h *HTTP) companyID(c *gin.Context) int64 {
 func (h *HTTP) Register(r *gin.Engine, jwtMiddleware gin.HandlerFunc) {
 	r.GET("/api/public/attachments/:token", h.publicAttachment)
 	r.GET("/api/public/pay/:token", h.publicPaymentPortal)
+	r.POST("/api/public/pay/:token/checkout", h.publicPayCheckout)
+	r.POST("/api/public/pay/:token/commit", h.publicPayCommit)
+	r.GET("/api/public/webpay/return/:token", h.webpayReturn)
+	r.POST("/api/public/webpay/return/:token", h.webpayReturn)
+	r.GET("/api/public/webpay/bridge/:id", h.webpayBridge)
 	r.POST("/api/webhooks/twilio/whatsapp", h.twilioWhatsAppWebhook)
 
 	api := r.Group("/api")
