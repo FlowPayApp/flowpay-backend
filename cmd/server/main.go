@@ -21,6 +21,7 @@ import (
 
 	"github.com/flowpay/flowpay-backend/internal/config"
 	"github.com/flowpay/flowpay-backend/internal/handler"
+	"github.com/flowpay/flowpay-backend/internal/transbank"
 	"github.com/flowpay/flowpay-backend/internal/jobs"
 	"github.com/flowpay/flowpay-backend/internal/middleware"
 	"github.com/flowpay/flowpay-backend/internal/repository"
@@ -44,7 +45,21 @@ func main() {
 	if err := os.MkdirAll(filepath.Clean(cfg.UploadDir), 0o755); err != nil {
 		log.Fatal("upload dir:", err)
 	}
-	svc := &service.Service{Repo: repo, Notify: cfg.Notify, UploadDir: cfg.UploadDir}
+	var tbk *transbank.Client
+	if cfg.TransbankCommerceCode != "" && cfg.TransbankAPIKey != "" {
+		tbk = transbank.NewClient(cfg.TransbankEnvironment, cfg.TransbankCommerceCode, cfg.TransbankAPIKey)
+	}
+	svc := &service.Service{
+		Repo:      repo,
+		Notify:    cfg.Notify,
+		UploadDir: cfg.UploadDir,
+		Webpay: &service.WebpayDeps{
+			PublicBaseURL:   cfg.PublicBaseURL,
+			FrontendBaseURL: cfg.FrontendBaseURL,
+			Environment:     cfg.TransbankEnvironment,
+			Transbank:       tbk,
+		},
+	}
 	wa := &services.WhatsAppService{Repo: repo}
 	h := &handler.HTTP{
 		Svc:      svc,
@@ -75,7 +90,7 @@ func main() {
 
 	srv := &http.Server{Addr: cfg.Addr, Handler: r}
 	go func() {
-		printStartupStatus(db, cfg.Addr, cfg.DSN, cfg.ReminderInterval, cfg.JWTSecret)
+		printStartupStatus(db, cfg.Addr, cfg.DSN, cfg.ReminderInterval, cfg.JWTSecret, cfg.PublicBaseURL, tbk != nil)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal(err)
 		}
@@ -89,7 +104,7 @@ func main() {
 	log.Println("servidor detenido")
 }
 
-func printStartupStatus(db *sql.DB, addr, dsn string, reminderInterval time.Duration, jwtSecret string) {
+func printStartupStatus(db *sql.DB, addr, dsn string, reminderInterval time.Duration, jwtSecret, publicBase string, webpayOn bool) {
 	const (
 		reset  = "\033[0m"
 		bold   = "\033[1m"
@@ -121,7 +136,17 @@ func printStartupStatus(db *sql.DB, addr, dsn string, reminderInterval time.Dura
 		log.Printf(cyan+"║"+reset+" %s", ok("JWT secret cargado"))
 	}
 
-	required := []string{"companies", "clients", "charges", "users"}
+	if webpayOn {
+		if strings.TrimSpace(publicBase) == "" {
+			log.Printf(cyan+"║"+reset+" %s", warn("Webpay: falta FLOWPAY_PUBLIC_BASE_URL (ngrok en local)"))
+		} else {
+			log.Printf(cyan+"║"+reset+" %s", ok("Webpay Plus integración activo"))
+		}
+	} else {
+		log.Printf(cyan+"║"+reset+" %s", warn("Webpay: sin FLOWPAY_TRANSBANK_* (solo pagos manuales)"))
+	}
+
+	required := []string{"companies", "clients", "charges", "users", "payment_tokens", "payment_transactions"}
 	var miss []string
 	for _, t := range required {
 		if !check(t) {
