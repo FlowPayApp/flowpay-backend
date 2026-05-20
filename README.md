@@ -2,6 +2,8 @@
 
 Backend del MVP **FlowPay**: cobranza y seguimiento de **cobros** (montos que te deben). No reemplaza un sistema de facturación electrónica ni emite DTE ante el SII.
 
+**Pagos** (portal público, Webpay, registro de pago) viven en **`flowpay-payments`**, no en este repo.
+
 ## Requisitos
 
 - Go 1.22+
@@ -56,11 +58,13 @@ La API queda en `http://127.0.0.1:8080`. Salud: `GET /health`.
 - `GET /api/charges/:id/reminders`
 - `POST /api/charges/:id/reminders` — enviar recordatorio manual (mock email/WhatsApp)
 - `POST /api/charges/:id/attachment` — subir PDF/imagen
-- `POST /api/payments` — `{ "charge_id": 1, "amount": 12345 }` (MVP: debe cubrir el total)
+- `GET /api/public/attachments/:token` — descarga pública de adjunto (WhatsApp)
+
+Los **pagos** (portal `/pay`, Webpay, `POST /api/payments`, tokens) están en el microservicio **`../flowpay-payments`** (`:8081`).
 
 ## Lógica de estado del cobro
 
-- **Cobrado**: si `paid_at` está definido (p. ej. tras `POST /payments`).
+- **Cobrado**: si `paid_at` está definido (p. ej. tras marcar pagado en UI o vía flowpay-payments).
 - **Vencido**: sin cobrar y fecha de vencimiento **anterior** al día calendario actual.
 - **Pendiente**: sin cobrar y vencimiento hoy o futuro.
 

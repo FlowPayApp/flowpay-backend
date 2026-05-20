@@ -26,7 +26,6 @@ import (
 	"github.com/flowpay/flowpay-backend/internal/repository"
 	"github.com/flowpay/flowpay-backend/internal/service"
 	"github.com/flowpay/flowpay-backend/internal/services"
-	"github.com/flowpay/flowpay-backend/internal/transbank"
 )
 
 func main() {
@@ -45,20 +44,10 @@ func main() {
 	if err := os.MkdirAll(filepath.Clean(cfg.UploadDir), 0o755); err != nil {
 		log.Fatal("upload dir:", err)
 	}
-	var tbk *transbank.Client
-	if cfg.TransbankCommerceCode != "" && cfg.TransbankAPIKey != "" {
-		tbk = transbank.NewClient(cfg.TransbankEnvironment, cfg.TransbankCommerceCode, cfg.TransbankAPIKey)
-	}
 	svc := &service.Service{
 		Repo:      repo,
 		Notify:    cfg.Notify,
 		UploadDir: cfg.UploadDir,
-		Webpay: &service.WebpayDeps{
-			PublicBaseURL:   cfg.PublicBaseURL,
-			FrontendBaseURL: cfg.FrontendBaseURL,
-			Environment:     cfg.TransbankEnvironment,
-			Transbank:       tbk,
-		},
 	}
 	wa := &services.WhatsAppService{Repo: repo}
 	h := &handler.HTTP{
@@ -90,7 +79,7 @@ func main() {
 
 	srv := &http.Server{Addr: cfg.Addr, Handler: r}
 	go func() {
-		printStartupStatus(db, cfg.Addr, cfg.DSN, cfg.ReminderInterval, cfg.JWTSecret, cfg.PublicBaseURL, tbk != nil)
+		printStartupStatus(db, cfg.Addr, cfg.DSN, cfg.ReminderInterval, cfg.JWTSecret, cfg.PublicBaseURL)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal(err)
 		}
@@ -104,7 +93,7 @@ func main() {
 	log.Println("servidor detenido")
 }
 
-func printStartupStatus(db *sql.DB, addr, dsn string, reminderInterval time.Duration, jwtSecret, publicBase string, webpayOn bool) {
+func printStartupStatus(db *sql.DB, addr, dsn string, reminderInterval time.Duration, jwtSecret, publicBase string) {
 	const (
 		reset  = "\033[0m"
 		bold   = "\033[1m"
@@ -129,6 +118,7 @@ func printStartupStatus(db *sql.DB, addr, dsn string, reminderInterval time.Dura
 	log.Printf(cyan+"║"+reset+" %s", ok("HTTP listening en "+addr))
 	log.Printf(cyan+"║"+reset+" %s", ok("Healthcheck: GET "+addr+"/health"))
 	log.Printf(cyan+"║"+reset+" %s", ok("Reminder job activo ("+reminderInterval.String()+")"))
+	log.Printf(cyan+"║"+reset+" %s", ok("Pagos/Webpay: flowpay-payments (repo aparte)"))
 
 	if strings.TrimSpace(jwtSecret) == "" {
 		log.Printf(cyan+"║"+reset+" %s", warn("FLOWPAY_JWT_SECRET vacío (modo dev)"))
@@ -136,17 +126,13 @@ func printStartupStatus(db *sql.DB, addr, dsn string, reminderInterval time.Dura
 		log.Printf(cyan+"║"+reset+" %s", ok("JWT secret cargado"))
 	}
 
-	if webpayOn {
-		if strings.TrimSpace(publicBase) == "" {
-			log.Printf(cyan+"║"+reset+" %s", warn("Webpay: falta FLOWPAY_PUBLIC_BASE_URL (ngrok en local)"))
-		} else {
-			log.Printf(cyan+"║"+reset+" %s", ok("Webpay Plus integración activo"))
-		}
+	if strings.TrimSpace(publicBase) == "" {
+		log.Printf(cyan+"║"+reset+" %s", warn("FLOWPAY_PUBLIC_BASE_URL vacía (adjuntos WhatsApp)"))
 	} else {
-		log.Printf(cyan+"║"+reset+" %s", warn("Webpay: sin FLOWPAY_TRANSBANK_* (solo pagos manuales)"))
+		log.Printf(cyan+"║"+reset+" %s", ok("URL pública para adjuntos: "+publicBase))
 	}
 
-	required := []string{"companies", "clients", "charges", "users", "payment_tokens", "payment_transactions"}
+	required := []string{"companies", "clients", "charges", "users"}
 	var miss []string
 	for _, t := range required {
 		if !check(t) {
@@ -177,5 +163,3 @@ func safeDSN(raw string) string {
 	}
 	return u.Redacted()
 }
-
-// console log para debug
