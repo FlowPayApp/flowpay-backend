@@ -138,7 +138,7 @@ func PhaseFromCharge(ch repository.Charge, now time.Time, priorOverdue int) (pha
 }
 
 // ResolveSubjectAndBody resuelve asunto y cuerpo (plantilla empresa o valores por defecto).
-func ResolveSubjectAndBody(ctx context.Context, repo *repository.Repository, companyID int64, phase string, daysUntil int, priorOverdue int, ch repository.Charge) (subject string, body string, err error) {
+func ResolveSubjectAndBody(ctx context.Context, repo *repository.DB, companyID int64, phase string, daysUntil int, priorOverdue int, ch repository.Charge) (subject string, body string, err error) {
 	rows, err := repo.ListReminderTemplates(ctx, companyID)
 	if err != nil {
 		rows = nil

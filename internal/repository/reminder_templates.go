@@ -17,8 +17,8 @@ type ReminderTemplateRow struct {
 	Body          string `json:"body"`
 }
 
-func (r *Repository) ListReminderTemplates(ctx context.Context, companyID int64) ([]ReminderTemplateRow, error) {
-	rows, err := r.db.QueryContext(ctx, `
+func (db *DB) ListReminderTemplates(ctx context.Context, companyID int64) ([]ReminderTemplateRow, error) {
+	rows, err := db.db.QueryContext(ctx, `
 SELECT id, company_id, phase, day_min, day_max, sort_order, COALESCE(email_subject,''), body
 FROM company_reminder_templates
 WHERE company_id = $1
@@ -40,8 +40,8 @@ ORDER BY phase ASC, sort_order ASC, day_min ASC, id ASC
 }
 
 // ReplaceReminderTemplates sustituye todas las plantillas del tenant (transacción).
-func (r *Repository) ReplaceReminderTemplates(ctx context.Context, companyID int64, list []ReminderTemplateRow) error {
-	tx, err := r.db.BeginTx(ctx, nil)
+func (db *DB) ReplaceReminderTemplates(ctx context.Context, companyID int64, list []ReminderTemplateRow) error {
+	tx, err := db.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}

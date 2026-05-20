@@ -12,10 +12,10 @@ type CompanyMessaging struct {
 	PaymentURLTemplate    string  `json:"payment_url_template"`
 }
 
-func (r *Repository) GetCompanyMessaging(ctx context.Context, companyID int64) (*CompanyMessaging, error) {
+func (db *DB) GetCompanyMessaging(ctx context.Context, companyID int64) (*CompanyMessaging, error) {
 	var m CompanyMessaging
 	var ti, pu sql.NullString
-	err := r.db.QueryRowContext(ctx, `
+	err := db.db.QueryRowContext(ctx, `
 SELECT name, transfer_instructions, payment_url_template
 FROM companies WHERE id = $1
 `, companyID).Scan(&m.Name, &ti, &pu)
@@ -31,8 +31,8 @@ FROM companies WHERE id = $1
 	return &m, nil
 }
 
-func (r *Repository) UpdateCompanyMessaging(ctx context.Context, companyID int64, transferInstructions, paymentURLTemplate string) error {
-	res, err := r.db.ExecContext(ctx, `
+func (db *DB) UpdateCompanyMessaging(ctx context.Context, companyID int64, transferInstructions, paymentURLTemplate string) error {
+	res, err := db.db.ExecContext(ctx, `
 UPDATE companies SET transfer_instructions = $1, payment_url_template = $2 WHERE id = $3
 `, nullStr(transferInstructions), nullStr(paymentURLTemplate), companyID)
 	if err != nil {

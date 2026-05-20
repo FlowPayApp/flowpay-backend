@@ -13,7 +13,7 @@ import (
 )
 
 // StartReminderJob ejecuta un ciclo por intervalo para **todas** las empresas en `companies`.
-func StartReminderJob(ctx context.Context, repo *repository.Repository, d *notify.Dispatcher, interval time.Duration) {
+func StartReminderJob(ctx context.Context, repo *repository.DB, d *notify.Dispatcher, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	go func() {
 		run := func() {
@@ -43,7 +43,7 @@ func StartReminderJob(ctx context.Context, repo *repository.Repository, d *notif
 	}()
 }
 
-func runOnce(ctx context.Context, repo *repository.Repository, d *notify.Dispatcher, companyID int64) {
+func runOnce(ctx context.Context, repo *repository.DB, d *notify.Dispatcher, companyID int64) {
 	log.Printf("[FlowPay Job] Inicio de ciclo de recordatorios (company_id=%d)…", companyID)
 	dueSoon, err := repo.ChargesDueSoon(ctx, companyID, 5)
 	if err != nil {
@@ -173,7 +173,7 @@ func overdueTemplate(ch repository.Charge, priorOverdueReminders int) (subject s
 	return "Seguimiento de cobro pendiente", notify.BodyOverdueFollowUp(ch)
 }
 
-func shouldPersist(ctx context.Context, repo *repository.Repository, chargeID int64, kind string) (bool, error) {
+func shouldPersist(ctx context.Context, repo *repository.DB, chargeID int64, kind string) (bool, error) {
 	n, err := repo.CountRecentReminders(ctx, chargeID, kind, 20*time.Hour)
 	if err != nil {
 		return false, err
