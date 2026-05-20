@@ -261,32 +261,6 @@ ORDER BY i.due_date
 	return r.queryCharges(ctx, q, companyID, days)
 }
 
-// ListChargesByClient lista todos los cobros de un cliente dentro de una empresa, ordenados por fecha de creación desc.
-func (r *Repository) ListChargesByClient(ctx context.Context, companyID, clientID int64) ([]Charge, error) {
-	q := `
-SELECT i.id, i.company_id, i.client_id, i.amount, i.due_date, i.paid_at,
-       i.attachment_token, i.attachment_ext, i.created_at, ` + chargeClientLabelExpr + `, c.email, c.phone, c.followup_channel
-FROM charges i
-JOIN clients c ON c.id = i.client_id
-WHERE i.company_id = $1 AND i.client_id = $2
-ORDER BY i.due_date ASC, i.id ASC
-`
-	return r.queryCharges(ctx, q, companyID, clientID)
-}
-
-// GetClientLabel devuelve el nombre de sucursal mostrable, usando la misma regla que ListCharges.
-func (r *Repository) GetClientLabel(ctx context.Context, companyID, clientID int64) (string, error) {
-	var label string
-	err := r.db.QueryRowContext(ctx,
-		`SELECT `+chargeClientLabelExpr+` FROM clients c WHERE c.id = $1 AND c.company_id = $2`,
-		clientID, companyID,
-	).Scan(&label)
-	if err != nil {
-		return "", err
-	}
-	return label, nil
-}
-
 func (r *Repository) ChargesOverdueUnpaid(ctx context.Context, companyID int64) ([]Charge, error) {
 	q := `
 SELECT i.id, i.company_id, i.client_id, i.amount, i.due_date, i.paid_at,
@@ -370,22 +344,6 @@ func (r *Repository) GetAttachmentExtByToken(ctx context.Context, token string) 
 		return "", errors.New("empty attachment")
 	}
 	return ext.String, nil
-}
-
-// ClientBelongsToCompany comprueba que el cliente pertenece a la empresa.
-func (r *Repository) ClientBelongsToCompany(ctx context.Context, companyID, clientID int64) (bool, error) {
-	var one int
-	err := r.db.QueryRowContext(ctx,
-		`SELECT 1 FROM clients WHERE id = $1 AND company_id = $2 LIMIT 1`,
-		clientID, companyID,
-	).Scan(&one)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return true, nil
 }
 
 func (r *Repository) ActiveClientBelongsToCompany(ctx context.Context, companyID, clientID int64) (bool, error) {

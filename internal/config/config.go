@@ -16,10 +16,6 @@ type Config struct {
 	JWTSecret             string
 	UploadDir             string
 	PublicBaseURL         string
-	FrontendBaseURL       string
-	TransbankCommerceCode string
-	TransbankAPIKey       string
-	TransbankEnvironment  string
 	Notify                *notify.Dispatcher
 	TwilioAccountSID      string
 	TwilioAuthToken       string
@@ -34,7 +30,6 @@ func envBool(key string) bool {
 func Load() Config {
 	dsn := os.Getenv("FLOWPAY_DSN")
 	if dsn == "" {
-		// PostgreSQL local (ajustar usuario/clave/BD). Supabase: sslmode=require en la URL.
 		dsn = "postgres://flowpay:flowpay@127.0.0.1:5432/flowpay?sslmode=disable"
 	}
 	addr := os.Getenv("FLOWPAY_ADDR")
@@ -75,16 +70,6 @@ func Load() Config {
 		PublicBaseURL:    publicBase,
 	})
 
-	tbkEnv := strings.TrimSpace(os.Getenv("FLOWPAY_TRANSBANK_ENV"))
-	if tbkEnv == "" {
-		tbkEnv = "integration"
-	}
-	frontendBase := strings.TrimSpace(os.Getenv("FLOWPAY_FRONTEND_BASE_URL"))
-	if frontendBase == "" {
-		frontendBase = "http://localhost:5173"
-	}
-	frontendBase = strings.TrimSuffix(frontendBase, "/")
-
 	return Config{
 		DSN:                   dsn,
 		Addr:                  addr,
@@ -93,10 +78,6 @@ func Load() Config {
 		JWTSecret:             strings.TrimSpace(os.Getenv("FLOWPAY_JWT_SECRET")),
 		UploadDir:             uploadDir,
 		PublicBaseURL:         publicBase,
-		FrontendBaseURL:       frontendBase,
-		TransbankCommerceCode: strings.TrimSpace(os.Getenv("FLOWPAY_TRANSBANK_COMMERCE_CODE")),
-		TransbankAPIKey:       strings.TrimSpace(os.Getenv("FLOWPAY_TRANSBANK_API_KEY")),
-		TransbankEnvironment:  tbkEnv,
 		Notify:                disp,
 		TwilioAccountSID:      strings.TrimSpace(os.Getenv("FLOWPAY_TWILIO_ACCOUNT_SID")),
 		TwilioAuthToken:       strings.TrimSpace(os.Getenv("FLOWPAY_TWILIO_AUTH_TOKEN")),

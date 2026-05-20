@@ -40,7 +40,6 @@ type Service struct {
 	Repo      *repository.Repository
 	Notify    *notify.Dispatcher
 	UploadDir string
-	Webpay    *WebpayDeps
 }
 
 func (s *Service) withStatus(ch repository.Charge) ChargeDTO {
@@ -383,20 +382,6 @@ func (s *Service) PatchCharge(ctx context.Context, companyID, chargeID int64, in
 		return nil
 	}
 	return s.Repo.MarkChargePaid(ctx, chargeID, ch.Amount)
-}
-
-func (s *Service) RecordPayment(ctx context.Context, companyID, chargeID int64, amount float64) error {
-	ch, err := s.Repo.GetCharge(ctx, companyID, chargeID)
-	if err != nil {
-		return err
-	}
-	if ch.PaidAt != nil {
-		return errors.New("already paid")
-	}
-	if amount < ch.Amount-0.01 {
-		return errors.New("amount must cover charge total for MVP")
-	}
-	return s.Repo.MarkChargePaid(ctx, chargeID, amount)
 }
 
 func (s *Service) PlatformOverview(ctx context.Context) (*PlatformOverviewResponse, error) {
