@@ -1,4 +1,4 @@
-package services
+package service
 
 import (
 	"context"
@@ -18,7 +18,7 @@ var (
 	ErrUnknownWhatsAppTo = errors.New("whatsapp to no registrado")
 )
 
-// WhatsAppService solo procesa webhooks entrantes de Twilio (guardar en messages).
+// WhatsAppService procesa webhooks entrantes de Twilio (guardar en messages).
 type WhatsAppService struct {
 	Repo *repository.Repository
 }

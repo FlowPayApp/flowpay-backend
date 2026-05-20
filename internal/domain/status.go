@@ -22,14 +22,3 @@ func truncateDate(t time.Time) time.Time {
 	y, m, d := t.Date()
 	return time.Date(y, m, d, 0, 0, 0, 0, t.Location())
 }
-
-// RiskLevel: heurística por cobros vencidos sin pagar del cliente.
-func RiskLevel(overdueCount int, overdueAmount float64) string {
-	if overdueCount >= 2 || overdueAmount >= 500000 {
-		return "high"
-	}
-	if overdueCount == 1 || overdueAmount >= 150000 {
-		return "medium"
-	}
-	return "low"
-}

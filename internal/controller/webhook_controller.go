@@ -1,4 +1,4 @@
-package handler
+package controller
 
 import (
 	"errors"
@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/flowpay/flowpay-backend/internal/services"
+	"github.com/flowpay/flowpay-backend/internal/service"
 	"github.com/flowpay/flowpay-backend/internal/twiliovalidate"
 	"github.com/gin-gonic/gin"
 )
@@ -17,7 +17,9 @@ type TwilioWebhookDeps struct {
 	ValidateTwilioSignature bool
 }
 
-func (h *HTTP) twilioWhatsAppWebhook(c *gin.Context) {
+type WebhookController struct{ Deps }
+
+func (h *WebhookController) TwilioWhatsApp(c *gin.Context) {
 	if err := c.Request.ParseForm(); err != nil {
 		log.Printf("[FlowPay WhatsApp] webhook parse form: %v", err)
 		c.Status(http.StatusBadRequest)
@@ -52,7 +54,7 @@ func (h *HTTP) twilioWhatsAppWebhook(c *gin.Context) {
 
 	err := h.WhatsApp.HandleInbound(c.Request.Context(), from, to, body)
 	if err != nil {
-		if errors.Is(err, services.ErrUnknownWhatsAppTo) {
+		if errors.Is(err, service.ErrUnknownWhatsAppTo) {
 			log.Printf("[FlowPay WhatsApp] webhook: To no registrado: %s", to)
 			c.Status(http.StatusOK)
 			return
