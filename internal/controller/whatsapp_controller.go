@@ -1,4 +1,4 @@
-package handler
+package controller
 
 import (
 	"errors"
@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/flowpay/flowpay-backend/internal/services"
+	"github.com/flowpay/flowpay-backend/internal/service"
 	"github.com/flowpay/flowpay-backend/internal/twiliovalidate"
 	"github.com/gin-gonic/gin"
 )
@@ -17,7 +17,7 @@ type TwilioWebhookDeps struct {
 	ValidateTwilioSignature bool
 }
 
-func (h *HTTP) twilioWhatsAppWebhook(c *gin.Context) {
+func (d *Deps) TwilioWhatsAppWebhook(c *gin.Context) {
 	if err := c.Request.ParseForm(); err != nil {
 		log.Printf("[FlowPay WhatsApp] webhook parse form: %v", err)
 		c.Status(http.StatusBadRequest)
@@ -25,10 +25,10 @@ func (h *HTTP) twilioWhatsAppWebhook(c *gin.Context) {
 	}
 	form := c.Request.PostForm
 
-	if h.TwilioWebhook.ValidateTwilioSignature && strings.TrimSpace(h.TwilioWebhook.AuthToken) != "" {
+	if d.TwilioWebhook.ValidateTwilioSignature && strings.TrimSpace(d.TwilioWebhook.AuthToken) != "" {
 		sig := c.GetHeader("X-Twilio-Signature")
 		fullURL := twilioWebhookFullURL(c)
-		ok := twiliovalidate.RequestValidator{AuthToken: h.TwilioWebhook.AuthToken}.Validate(sig, fullURL, form)
+		ok := twiliovalidate.RequestValidator{AuthToken: d.TwilioWebhook.AuthToken}.Validate(sig, fullURL, form)
 		if !ok {
 			log.Printf("[FlowPay WhatsApp] webhook firma inválida url=%s", fullURL)
 			c.Status(http.StatusForbidden)
@@ -44,15 +44,15 @@ func (h *HTTP) twilioWhatsAppWebhook(c *gin.Context) {
 	body := form.Get("Body")
 	log.Printf("[FlowPay WhatsApp] webhook recibido From=%s To=%s BodyLen=%d", from, to, len(body))
 
-	if h.WhatsApp == nil {
+	if d.WhatsApp == nil {
 		log.Printf("[FlowPay WhatsApp] webhook: servicio nil")
 		c.Status(http.StatusOK)
 		return
 	}
 
-	err := h.WhatsApp.HandleInbound(c.Request.Context(), from, to, body)
+	err := d.WhatsApp.HandleInbound(c.Request.Context(), from, to, body)
 	if err != nil {
-		if errors.Is(err, services.ErrUnknownWhatsAppTo) {
+		if errors.Is(err, service.ErrUnknownWhatsAppTo) {
 			log.Printf("[FlowPay WhatsApp] webhook: To no registrado: %s", to)
 			c.Status(http.StatusOK)
 			return

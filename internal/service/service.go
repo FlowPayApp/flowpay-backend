@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/flowpay/flowpay-backend/internal/domain"
-	"github.com/flowpay/flowpay-backend/internal/models"
+	"github.com/flowpay/flowpay-backend/internal/model"
 	"github.com/flowpay/flowpay-backend/internal/notify"
 	"github.com/flowpay/flowpay-backend/internal/remindercontent"
 	"github.com/flowpay/flowpay-backend/internal/repository"
@@ -37,7 +37,7 @@ type PlatformOverviewResponse struct {
 }
 
 type Service struct {
-	Repo      *repository.Repository
+	Repo      *repository.DB
 	Notify    *notify.Dispatcher
 	UploadDir string
 }
@@ -285,7 +285,7 @@ func (s *Service) ListReminders(ctx context.Context, companyID, chargeID int64) 
 }
 
 // ListChargeInboundWhatsApp respuestas del cliente (WhatsApp entrante) vinculadas al cobro.
-func (s *Service) ListChargeInboundWhatsApp(ctx context.Context, companyID, chargeID int64) ([]models.Message, error) {
+func (s *Service) ListChargeInboundWhatsApp(ctx context.Context, companyID, chargeID int64) ([]model.Message, error) {
 	if _, err := s.Repo.GetCharge(ctx, companyID, chargeID); err != nil {
 		return nil, err
 	}
@@ -293,7 +293,7 @@ func (s *Service) ListChargeInboundWhatsApp(ctx context.Context, companyID, char
 }
 
 // SimulateChargeInboundWhatsApp inserta un mensaje entrante de prueba vinculado al cobro (demo / QA).
-func (s *Service) SimulateChargeInboundWhatsApp(ctx context.Context, companyID, chargeID int64, text string) (*models.Message, error) {
+func (s *Service) SimulateChargeInboundWhatsApp(ctx context.Context, companyID, chargeID int64, text string) (*model.Message, error) {
 	ch, err := s.Repo.GetCharge(ctx, companyID, chargeID)
 	if err != nil {
 		return nil, err
@@ -314,7 +314,7 @@ func (s *Service) SimulateChargeInboundWhatsApp(ctx context.Context, companyID, 
 		toNorm = strings.TrimSpace(tn)
 	}
 	cid := chargeID
-	m := &models.Message{
+	m := &model.Message{
 		CompanyID:  companyID,
 		ChargeID:   &cid,
 		FromNumber: fromNorm,

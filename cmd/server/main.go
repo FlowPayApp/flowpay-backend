@@ -20,12 +20,12 @@ import (
 	_ "github.com/joho/godotenv/autoload"
 
 	"github.com/flowpay/flowpay-backend/internal/config"
-	"github.com/flowpay/flowpay-backend/internal/handler"
+	"github.com/flowpay/flowpay-backend/internal/controller"
 	"github.com/flowpay/flowpay-backend/internal/jobs"
 	"github.com/flowpay/flowpay-backend/internal/middleware"
 	"github.com/flowpay/flowpay-backend/internal/repository"
+	"github.com/flowpay/flowpay-backend/internal/routes"
 	"github.com/flowpay/flowpay-backend/internal/service"
-	"github.com/flowpay/flowpay-backend/internal/services"
 )
 
 func main() {
@@ -49,11 +49,11 @@ func main() {
 		Notify:    cfg.Notify,
 		UploadDir: cfg.UploadDir,
 	}
-	wa := &services.WhatsAppService{Repo: repo}
-	h := &handler.HTTP{
+	wa := &service.WhatsAppService{Repo: repo}
+	deps := controller.Deps{
 		Svc:      svc,
 		WhatsApp: wa,
-		TwilioWebhook: handler.TwilioWebhookDeps{
+		TwilioWebhook: controller.TwilioWebhookDeps{
 			AuthToken:               cfg.TwilioAuthToken,
 			ValidateTwilioSignature: cfg.TwilioValidateWebhook,
 		},
@@ -70,7 +70,7 @@ func main() {
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
 	}))
-	h.Register(r, middleware.BearerJWT(cfg.JWTSecret))
+	routes.Register(r, deps, middleware.BearerJWT(cfg.JWTSecret))
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

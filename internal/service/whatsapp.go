@@ -1,4 +1,4 @@
-package services
+package service
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/flowpay/flowpay-backend/internal/models"
+	"github.com/flowpay/flowpay-backend/internal/model"
 	"github.com/flowpay/flowpay-backend/internal/notify"
 	"github.com/flowpay/flowpay-backend/internal/repository"
 )
@@ -20,7 +20,7 @@ var (
 
 // WhatsAppService solo procesa webhooks entrantes de Twilio (guardar en messages).
 type WhatsAppService struct {
-	Repo *repository.Repository
+	Repo *repository.DB
 }
 
 // HandleInbound guarda mensaje entrante enrutado por número receptor (To).
@@ -48,7 +48,7 @@ func (s *WhatsAppService) HandleInbound(ctx context.Context, fromRaw, toRaw, bod
 		log.Printf("[FlowPay WhatsApp] warn asociando cobro inbound: %v", err)
 	}
 	log.Printf("[FlowPay WhatsApp] inbound company=%d from=%s to=%s charge_id=%v len=%d", wn.CompanyID, fromNorm, toNorm, chargeID, len(content))
-	_, err = s.Repo.InsertMessage(ctx, &models.Message{
+	_, err = s.Repo.InsertMessage(ctx, &model.Message{
 		CompanyID:  wn.CompanyID,
 		ChargeID:   chargeID,
 		FromNumber: fromNorm,

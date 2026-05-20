@@ -75,17 +75,17 @@ type CompanyOverviewRow struct {
 	OwedAmount    float64 `json:"owed_amount"`
 }
 
-type Repository struct {
+type DB struct {
 	db *sql.DB
 }
 
-func New(db *sql.DB) *Repository {
-	return &Repository{db: db}
+func New(db *sql.DB) *DB {
+	return &DB{db: db}
 }
 
 // ListCompanyIDs devuelve todos los negocios (tenants) registrados — p. ej. para jobs multi-empresa.
-func (r *Repository) ListCompanyIDs(ctx context.Context) ([]int64, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT id FROM companies ORDER BY id ASC`)
+func (db *DB) ListCompanyIDs(ctx context.Context) ([]int64, error) {
+	rows, err := db.db.QueryContext(ctx, `SELECT id FROM companies ORDER BY id ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +117,7 @@ func scanChargeClient(rows *sql.Rows, ch *Charge) error {
 	return nil
 }
 
-func (r *Repository) ListCharges(ctx context.Context, companyID int64) ([]Charge, error) {
+func (db *DB) ListCharges(ctx context.Context, companyID int64) ([]Charge, error) {
 	q := `
 SELECT i.id, i.company_id, i.client_id, i.amount, i.due_date, i.paid_at,
        i.attachment_token, i.attachment_ext, i.created_at, ` + chargeClientLabelExpr + `, c.email, c.phone, c.followup_channel
@@ -126,7 +126,7 @@ JOIN clients c ON c.id = i.client_id
 WHERE i.company_id = $1
 ORDER BY i.due_date ASC, i.id ASC
 `
-	rows, err := r.db.QueryContext(ctx, q, companyID)
+	rows, err := db.db.QueryContext(ctx, q, companyID)
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +142,7 @@ ORDER BY i.due_date ASC, i.id ASC
 	return out, rows.Err()
 }
 
-func (r *Repository) GetCharge(ctx context.Context, companyID, id int64) (*Charge, error) {
+func (db *DB) GetCharge(ctx context.Context, companyID, id int64) (*Charge, error) {
 	q := `
 SELECT i.id, i.company_id, i.client_id, i.amount, i.due_date, i.paid_at,
        i.attachment_token, i.attachment_ext, i.created_at, ` + chargeClientLabelExpr + `, c.email, c.phone, c.followup_channel
@@ -152,7 +152,7 @@ WHERE i.company_id = $1 AND i.id = $2
 `
 	var ch Charge
 	var ce, cp, atok, aext sql.NullString
-	err := r.db.QueryRowContext(ctx, q, companyID, id).Scan(
+	err := db.db.QueryRowContext(ctx, q, companyID, id).Scan(
 		&ch.ID, &ch.CompanyID, &ch.ClientID, &ch.Amount, &ch.DueDate, &ch.PaidAt,
 		&atok, &aext, &ch.CreatedAt, &ch.ClientName, &ce, &cp, &ch.ClientFollowupChannel,
 	)
@@ -166,9 +166,9 @@ WHERE i.company_id = $1 AND i.id = $2
 	return &ch, nil
 }
 
-func (r *Repository) CreateCharge(ctx context.Context, companyID, clientID int64, amount float64, dueDate time.Time) (int64, error) {
+func (db *DB) CreateCharge(ctx context.Context, companyID, clientID int64, amount float64, dueDate time.Time) (int64, error) {
 	var id int64
-	err := r.db.QueryRowContext(ctx,
+	err := db.db.QueryRowContext(ctx,
 		`INSERT INTO charges (company_id, client_id, amount, due_date) VALUES ($1, $2, $3, $4) RETURNING id`,
 		companyID, clientID, amount, dueDate.Format("2006-01-02"),
 	).Scan(&id)
@@ -179,8 +179,8 @@ func (r *Repository) CreateCharge(ctx context.Context, companyID, clientID int64
 }
 
 // DeleteCharge elimina el cobro; payments y reminders asociados se eliminan en cascada.
-func (r *Repository) DeleteCharge(ctx context.Context, companyID, chargeID int64) error {
-	res, err := r.db.ExecContext(ctx,
+func (db *DB) DeleteCharge(ctx context.Context, companyID, chargeID int64) error {
+	res, err := db.db.ExecContext(ctx,
 		`DELETE FROM charges WHERE id = $1 AND company_id = $2`,
 		chargeID, companyID,
 	)
@@ -197,8 +197,8 @@ func (r *Repository) DeleteCharge(ctx context.Context, companyID, chargeID int64
 	return nil
 }
 
-func (r *Repository) MarkChargePaid(ctx context.Context, chargeID int64, amount float64) error {
-	tx, err := r.db.BeginTx(ctx, nil)
+func (db *DB) MarkChargePaid(ctx context.Context, chargeID int64, amount float64) error {
+	tx, err := db.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -212,12 +212,12 @@ func (r *Repository) MarkChargePaid(ctx context.Context, chargeID int64, amount 
 	return tx.Commit()
 }
 
-func (r *Repository) ListReminders(ctx context.Context, chargeID int64) ([]Reminder, error) {
+func (db *DB) ListReminders(ctx context.Context, chargeID int64) ([]Reminder, error) {
 	q := `
 SELECT id, charge_id, kind, channel, status, message, created_at, sent_at
 FROM reminders WHERE charge_id = $1 ORDER BY created_at ASC, id ASC
 `
-	rows, err := r.db.QueryContext(ctx, q, chargeID)
+	rows, err := db.db.QueryContext(ctx, q, chargeID)
 	if err != nil {
 		return nil, err
 	}
@@ -233,9 +233,9 @@ FROM reminders WHERE charge_id = $1 ORDER BY created_at ASC, id ASC
 	return out, rows.Err()
 }
 
-func (r *Repository) InsertReminder(ctx context.Context, chargeID int64, kind, channel, status, message string, sentAt *time.Time) (int64, error) {
+func (db *DB) InsertReminder(ctx context.Context, chargeID int64, kind, channel, status, message string, sentAt *time.Time) (int64, error) {
 	var id int64
-	err := r.db.QueryRowContext(ctx,
+	err := db.db.QueryRowContext(ctx,
 		`INSERT INTO reminders (charge_id, kind, channel, status, message, sent_at) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
 		chargeID, kind, channel, status, message, sentAt,
 	).Scan(&id)
@@ -246,7 +246,7 @@ func (r *Repository) InsertReminder(ctx context.Context, chargeID int64, kind, c
 }
 
 // ChargesDueSoon: no cobrados, due_date entre hoy y hoy+days (inclusive upper bound por día).
-func (r *Repository) ChargesDueSoon(ctx context.Context, companyID int64, days int) ([]Charge, error) {
+func (db *DB) ChargesDueSoon(ctx context.Context, companyID int64, days int) ([]Charge, error) {
 	q := `
 SELECT i.id, i.company_id, i.client_id, i.amount, i.due_date, i.paid_at,
        i.attachment_token, i.attachment_ext, i.created_at, ` + chargeClientLabelExpr + `, c.email, c.phone, c.followup_channel
@@ -258,10 +258,10 @@ WHERE i.company_id = $1
   AND i.due_date <= CURRENT_DATE + ($2::int * interval '1 day')
 ORDER BY i.due_date
 `
-	return r.queryCharges(ctx, q, companyID, days)
+	return db.queryCharges(ctx, q, companyID, days)
 }
 
-func (r *Repository) ChargesOverdueUnpaid(ctx context.Context, companyID int64) ([]Charge, error) {
+func (db *DB) ChargesOverdueUnpaid(ctx context.Context, companyID int64) ([]Charge, error) {
 	q := `
 SELECT i.id, i.company_id, i.client_id, i.amount, i.due_date, i.paid_at,
        i.attachment_token, i.attachment_ext, i.created_at, ` + chargeClientLabelExpr + `, c.email, c.phone, c.followup_channel
@@ -272,11 +272,11 @@ WHERE i.company_id = $1
   AND i.due_date < CURRENT_DATE
 ORDER BY i.due_date
 `
-	return r.queryCharges(ctx, q, companyID)
+	return db.queryCharges(ctx, q, companyID)
 }
 
-func (r *Repository) queryCharges(ctx context.Context, query string, args ...any) ([]Charge, error) {
-	rows, err := r.db.QueryContext(ctx, query, args...)
+func (db *DB) queryCharges(ctx context.Context, query string, args ...any) ([]Charge, error) {
+	rows, err := db.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -292,9 +292,9 @@ func (r *Repository) queryCharges(ctx context.Context, query string, args ...any
 	return out, rows.Err()
 }
 
-func (r *Repository) CountRecentReminders(ctx context.Context, chargeID int64, kind string, within time.Duration) (int, error) {
+func (db *DB) CountRecentReminders(ctx context.Context, chargeID int64, kind string, within time.Duration) (int, error) {
 	var n int
-	err := r.db.QueryRowContext(ctx,
+	err := db.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM reminders WHERE charge_id = $1 AND kind = $2 AND created_at > NOW() - ($3::bigint * interval '1 second')`,
 		chargeID, kind, int64(within.Seconds()),
 	).Scan(&n)
@@ -302,9 +302,9 @@ func (r *Repository) CountRecentReminders(ctx context.Context, chargeID int64, k
 }
 
 // CountRemindersByKind cuenta todos los recordatorios de un tipo (p. ej. overdue acumulados).
-func (r *Repository) CountRemindersByKind(ctx context.Context, chargeID int64, kind string) (int, error) {
+func (db *DB) CountRemindersByKind(ctx context.Context, chargeID int64, kind string) (int, error) {
 	var n int
-	err := r.db.QueryRowContext(ctx,
+	err := db.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM reminders WHERE charge_id = $1 AND kind = $2`,
 		chargeID, kind,
 	).Scan(&n)
@@ -312,8 +312,8 @@ func (r *Repository) CountRemindersByKind(ctx context.Context, chargeID int64, k
 }
 
 // SetChargeAttachment guarda token y extensión del archivo (sin punto).
-func (r *Repository) SetChargeAttachment(ctx context.Context, companyID, chargeID int64, token, ext string) error {
-	res, err := r.db.ExecContext(ctx,
+func (db *DB) SetChargeAttachment(ctx context.Context, companyID, chargeID int64, token, ext string) error {
+	res, err := db.db.ExecContext(ctx,
 		`UPDATE charges SET attachment_token = $1, attachment_ext = $2 WHERE id = $3 AND company_id = $4`,
 		token, ext, chargeID, companyID,
 	)
@@ -331,9 +331,9 @@ func (r *Repository) SetChargeAttachment(ctx context.Context, companyID, chargeI
 }
 
 // GetAttachmentExtByToken devuelve la extensión si existe cobro con ese token.
-func (r *Repository) GetAttachmentExtByToken(ctx context.Context, token string) (string, error) {
+func (db *DB) GetAttachmentExtByToken(ctx context.Context, token string) (string, error) {
 	var ext sql.NullString
-	err := r.db.QueryRowContext(ctx,
+	err := db.db.QueryRowContext(ctx,
 		`SELECT attachment_ext FROM charges WHERE attachment_token = $1 AND attachment_token IS NOT NULL`,
 		token,
 	).Scan(&ext)
@@ -346,9 +346,9 @@ func (r *Repository) GetAttachmentExtByToken(ctx context.Context, token string) 
 	return ext.String, nil
 }
 
-func (r *Repository) ActiveClientBelongsToCompany(ctx context.Context, companyID, clientID int64) (bool, error) {
+func (db *DB) ActiveClientBelongsToCompany(ctx context.Context, companyID, clientID int64) (bool, error) {
 	var one int
-	err := r.db.QueryRowContext(ctx,
+	err := db.db.QueryRowContext(ctx,
 		`SELECT 1 FROM clients WHERE id = $1 AND company_id = $2 AND is_active = TRUE LIMIT 1`,
 		clientID, companyID,
 	).Scan(&one)
@@ -362,7 +362,7 @@ func (r *Repository) ActiveClientBelongsToCompany(ctx context.Context, companyID
 }
 
 // UpdateChargeFields actualiza solo los campos no nil.
-func (r *Repository) UpdateChargeFields(ctx context.Context, companyID, chargeID int64, clientID *int64, dueDate *time.Time, amount *float64) error {
+func (db *DB) UpdateChargeFields(ctx context.Context, companyID, chargeID int64, clientID *int64, dueDate *time.Time, amount *float64) error {
 	var sets []string
 	var args []any
 	n := 1
@@ -385,7 +385,7 @@ func (r *Repository) UpdateChargeFields(ctx context.Context, companyID, chargeID
 		return nil
 	}
 	var one int
-	if err := r.db.QueryRowContext(ctx,
+	if err := db.db.QueryRowContext(ctx,
 		`SELECT 1 FROM charges WHERE id = $1 AND company_id = $2 LIMIT 1`,
 		chargeID, companyID,
 	).Scan(&one); err != nil {
@@ -395,13 +395,13 @@ func (r *Repository) UpdateChargeFields(ctx context.Context, companyID, chargeID
 	coPH := n + 1
 	args = append(args, chargeID, companyID)
 	q := fmt.Sprintf("UPDATE charges SET %s WHERE id = $%d AND company_id = $%d", strings.Join(sets, ", "), idPH, coPH)
-	_, err := r.db.ExecContext(ctx, q, args...)
+	_, err := db.db.ExecContext(ctx, q, args...)
 	return err
 }
 
 // ClearChargePayment quita el estado cobrado y los pagos asociados (MVP).
-func (r *Repository) ClearChargePayment(ctx context.Context, companyID, chargeID int64) error {
-	tx, err := r.db.BeginTx(ctx, nil)
+func (db *DB) ClearChargePayment(ctx context.Context, companyID, chargeID int64) error {
+	tx, err := db.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -423,7 +423,7 @@ func (r *Repository) ClearChargePayment(ctx context.Context, companyID, chargeID
 	return tx.Commit()
 }
 
-func (r *Repository) DashboardAggregate(ctx context.Context, companyID int64) (DashboardTotals, error) {
+func (db *DB) DashboardAggregate(ctx context.Context, companyID int64) (DashboardTotals, error) {
 	var t DashboardTotals
 	q := `
 SELECT
@@ -436,7 +436,7 @@ SELECT
 FROM charges
 WHERE company_id = $1
 `
-	err := r.db.QueryRowContext(ctx, q, companyID).Scan(
+	err := db.db.QueryRowContext(ctx, q, companyID).Scan(
 		&t.PaidAmount, &t.PaidCount,
 		&t.PendingAmount, &t.PendingCount,
 		&t.OverdueAmount, &t.OverdueCount,
@@ -444,7 +444,7 @@ WHERE company_id = $1
 	return t, err
 }
 
-func (r *Repository) PlatformCompaniesOverview(ctx context.Context) ([]CompanyOverviewRow, error) {
+func (db *DB) PlatformCompaniesOverview(ctx context.Context) ([]CompanyOverviewRow, error) {
 	q := `
 SELECT
   c.id,
@@ -472,7 +472,7 @@ SELECT
 FROM companies c
 ORDER BY c.id ASC
 `
-	rows, err := r.db.QueryContext(ctx, q)
+	rows, err := db.db.QueryContext(ctx, q)
 	if err != nil {
 		return nil, err
 	}

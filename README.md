@@ -4,6 +4,28 @@ Backend del MVP **FlowPay**: cobranza y seguimiento de **cobros** (montos que te
 
 **Pagos** (portal público, Webpay, registro de pago) viven en **`flowpay-payments`**, no en este repo.
 
+## Estructura del código
+
+```
+flowpay-backend/
+├── cmd/server/
+├── internal/
+│   ├── routes/           → URLs
+│   ├── controller/       → HTTP
+│   ├── service/          → lógica de negocio
+│   ├── repository/       → SQL (tipo DB)
+│   ├── model/            → entidades auxiliares (WhatsApp)
+│   ├── config/
+│   ├── domain/
+│   ├── middleware/
+│   ├── authjwt/
+│   ├── notify/           → integración correo/WhatsApp
+│   ├── jobs/
+│   └── ...
+```
+
+Flujo: **ruta → controlador → servicio → repositorio → PostgreSQL**.
+
 ## Requisitos
 
 - Go 1.22+
