@@ -45,7 +45,7 @@ func mimeFromExt(extNoDot string) string {
 }
 
 // SaveChargeAttachment guarda PDF/imagen y asocia el cobro.
-func (s *Service) SaveChargeAttachment(ctx context.Context, companyID, chargeID int64, src io.Reader, origName string, size int64) error {
+func (s *Service) SaveChargeAttachment(ctx context.Context, companyID, chargeID, memberUID int64, src io.Reader, origName string, size int64) error {
 	if s.UploadDir == "" {
 		return errors.New("upload dir not configured")
 	}
@@ -57,7 +57,7 @@ func (s *Service) SaveChargeAttachment(ctx context.Context, companyID, chargeID 
 		return errors.New("archivo demasiado grande (máx 8 MB)")
 	}
 
-	ch, err := s.Repo.GetCharge(ctx, companyID, chargeID)
+	ch, err := s.Repo.GetCharge(ctx, companyID, chargeID, memberUID)
 	if err != nil {
 		return err
 	}

@@ -11,7 +11,7 @@ import (
 )
 
 func (d *Deps) ListCharges(c *gin.Context) {
-	list, err := d.Svc.ListCharges(c.Request.Context(), d.companyID(c))
+	list, err := d.Svc.ListCharges(c.Request.Context(), d.companyID(c), d.memberUID(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -25,7 +25,7 @@ func (d *Deps) CreateCharge(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json"})
 		return
 	}
-	id, err := d.Svc.CreateCharge(c.Request.Context(), d.companyID(c), in)
+	id, err := d.Svc.CreateCharge(c.Request.Context(), d.companyID(c), d.memberUID(c), in)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -44,7 +44,7 @@ func (d *Deps) PatchCharge(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json"})
 		return
 	}
-	if err := d.Svc.PatchCharge(c.Request.Context(), d.companyID(c), id, in); err != nil {
+	if err := d.Svc.PatchCharge(c.Request.Context(), d.companyID(c), id, d.memberUID(c), in); err != nil {
 		if service.ErrNotFound(err) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return
@@ -52,7 +52,7 @@ func (d *Deps) PatchCharge(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	ch, err := d.Svc.GetCharge(c.Request.Context(), d.companyID(c), id)
+	ch, err := d.Svc.GetCharge(c.Request.Context(), d.companyID(c), id, d.memberUID(c))
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 		return
@@ -66,7 +66,7 @@ func (d *Deps) GetCharge(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "bad id"})
 		return
 	}
-	ch, err := d.Svc.GetCharge(c.Request.Context(), d.companyID(c), id)
+	ch, err := d.Svc.GetCharge(c.Request.Context(), d.companyID(c), id, d.memberUID(c))
 	if err != nil {
 		if service.ErrNotFound(err) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
@@ -79,6 +79,9 @@ func (d *Deps) GetCharge(c *gin.Context) {
 }
 
 func (d *Deps) DeleteCharge(c *gin.Context) {
+	if !d.requireCompanyAdmin(c) {
+		return
+	}
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "bad id"})
@@ -101,7 +104,7 @@ func (d *Deps) ListReminders(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "bad id"})
 		return
 	}
-	list, err := d.Svc.ListReminders(c.Request.Context(), d.companyID(c), id)
+	list, err := d.Svc.ListReminders(c.Request.Context(), d.companyID(c), id, d.memberUID(c))
 	if err != nil {
 		if service.ErrNotFound(err) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
@@ -119,7 +122,7 @@ func (d *Deps) ListChargeInboundWhatsApp(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "bad id"})
 		return
 	}
-	list, err := d.Svc.ListChargeInboundWhatsApp(c.Request.Context(), d.companyID(c), id)
+	list, err := d.Svc.ListChargeInboundWhatsApp(c.Request.Context(), d.companyID(c), id, d.memberUID(c))
 	if err != nil {
 		if service.ErrNotFound(err) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
@@ -143,7 +146,7 @@ func (d *Deps) SimulateChargeInboundWhatsApp(c *gin.Context) {
 	}
 	var body simulateInboundBody
 	_ = c.ShouldBindJSON(&body)
-	m, err := d.Svc.SimulateChargeInboundWhatsApp(c.Request.Context(), d.companyID(c), id, body.Text)
+	m, err := d.Svc.SimulateChargeInboundWhatsApp(c.Request.Context(), d.companyID(c), id, d.memberUID(c), body.Text)
 	if err != nil {
 		if service.ErrNotFound(err) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
@@ -165,6 +168,9 @@ func (d *Deps) GetCompanyMessaging(c *gin.Context) {
 }
 
 func (d *Deps) PutCompanyMessaging(c *gin.Context) {
+	if !d.requireCompanyAdmin(c) {
+		return
+	}
 	var body service.SaveMessagingInput
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "payload inválido"})
@@ -183,7 +189,7 @@ func (d *Deps) SendReminder(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "bad id"})
 		return
 	}
-	if err := d.Svc.SendReminderNow(c.Request.Context(), d.companyID(c), id); err != nil {
+	if err := d.Svc.SendReminderNow(c.Request.Context(), d.companyID(c), id, d.memberUID(c)); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -191,7 +197,7 @@ func (d *Deps) SendReminder(c *gin.Context) {
 }
 
 func (d *Deps) Dashboard(c *gin.Context) {
-	out, err := d.Svc.Dashboard(c.Request.Context(), d.companyID(c))
+	out, err := d.Svc.Dashboard(c.Request.Context(), d.companyID(c), d.memberUID(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -233,7 +239,7 @@ func (d *Deps) UploadChargeAttachment(c *gin.Context) {
 		return
 	}
 	defer src.Close()
-	err = d.Svc.SaveChargeAttachment(c.Request.Context(), d.companyID(c), id, src, fh.Filename, fh.Size)
+	err = d.Svc.SaveChargeAttachment(c.Request.Context(), d.companyID(c), id, d.memberUID(c), src, fh.Filename, fh.Size)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return

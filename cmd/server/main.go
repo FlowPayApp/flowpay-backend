@@ -41,6 +41,9 @@ func main() {
 	}
 
 	repo := repository.New(db)
+	if err := repo.EnsureClientPortfolioColumns(context.Background()); err != nil {
+		log.Printf("warn: columnas de cartera de clientes: %v", err)
+	}
 	if err := os.MkdirAll(filepath.Clean(cfg.UploadDir), 0o755); err != nil {
 		log.Fatal("upload dir:", err)
 	}
