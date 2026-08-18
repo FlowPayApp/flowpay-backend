@@ -47,8 +47,8 @@ func (s *Service) withStatus(ch repository.Charge) ChargeDTO {
 	return ChargeDTO{Charge: ch, Status: st}
 }
 
-func (s *Service) ListCharges(ctx context.Context, companyID int64) ([]ChargeDTO, error) {
-	list, err := s.Repo.ListCharges(ctx, companyID)
+func (s *Service) ListCharges(ctx context.Context, companyID, memberUID int64) ([]ChargeDTO, error) {
+	list, err := s.Repo.ListCharges(ctx, companyID, memberUID)
 	if err != nil {
 		return nil, err
 	}
@@ -59,8 +59,8 @@ func (s *Service) ListCharges(ctx context.Context, companyID int64) ([]ChargeDTO
 	return out, nil
 }
 
-func (s *Service) GetCharge(ctx context.Context, companyID, id int64) (*ChargeDTO, error) {
-	ch, err := s.Repo.GetCharge(ctx, companyID, id)
+func (s *Service) GetCharge(ctx context.Context, companyID, id, memberUID int64) (*ChargeDTO, error) {
+	ch, err := s.Repo.GetCharge(ctx, companyID, id, memberUID)
 	if err != nil {
 		return nil, err
 	}
@@ -74,13 +74,20 @@ type CreateChargeInput struct {
 	DueDate  string  `json:"due_date"`
 }
 
-func (s *Service) CreateCharge(ctx context.Context, companyID int64, in CreateChargeInput) (int64, error) {
+func (s *Service) CreateCharge(ctx context.Context, companyID, memberUID int64, in CreateChargeInput) (int64, error) {
 	if in.ClientID == 0 || in.Amount <= 0 || in.DueDate == "" {
 		return 0, errors.New("payload de cobro inválido")
 	}
 	due, err := time.ParseInLocation("2006-01-02", in.DueDate, time.Local)
 	if err != nil {
 		return 0, errors.New("due_date debe ser YYYY-MM-DD")
+	}
+	ok, err := s.Repo.ActiveClientBelongsToCompany(ctx, companyID, in.ClientID, memberUID)
+	if err != nil {
+		return 0, err
+	}
+	if !ok {
+		return 0, errors.New("cliente no válido, inactivo o fuera de tu cartera")
 	}
 	return s.Repo.CreateCharge(ctx, companyID, in.ClientID, in.Amount, due)
 }
@@ -89,13 +96,13 @@ func (s *Service) DeleteCharge(ctx context.Context, companyID, chargeID int64) e
 	return s.Repo.DeleteCharge(ctx, companyID, chargeID)
 }
 
-func (s *Service) Dashboard(ctx context.Context, companyID int64) (*DashboardResponse, error) {
-	totals, err := s.Repo.DashboardAggregate(ctx, companyID)
+func (s *Service) Dashboard(ctx context.Context, companyID, memberUID int64) (*DashboardResponse, error) {
+	totals, err := s.Repo.DashboardAggregate(ctx, companyID, memberUID)
 	if err != nil {
 		return nil, err
 	}
-	overdue, _ := s.Repo.ChargesOverdueUnpaid(ctx, companyID)
-	dueSoon, _ := s.Repo.ChargesDueSoon(ctx, companyID, 7)
+	overdue, _ := s.Repo.ChargesOverdueUnpaid(ctx, companyID, memberUID)
+	dueSoon, _ := s.Repo.ChargesDueSoon(ctx, companyID, 7, memberUID)
 	seen := map[int64]struct{}{}
 	var attention []ChargeDTO
 	for _, ch := range overdue {
@@ -120,8 +127,8 @@ func (s *Service) Dashboard(ctx context.Context, companyID int64) (*DashboardRes
 	}, nil
 }
 
-func (s *Service) SendReminderNow(ctx context.Context, companyID, chargeID int64) error {
-	ch, err := s.Repo.GetCharge(ctx, companyID, chargeID)
+func (s *Service) SendReminderNow(ctx context.Context, companyID, chargeID, memberUID int64) error {
+	ch, err := s.Repo.GetCharge(ctx, companyID, chargeID, memberUID)
 	if err != nil {
 		return err
 	}
@@ -277,24 +284,24 @@ func dateOnly(t time.Time) time.Time {
 	return time.Date(y, m, day, 0, 0, 0, 0, t.Location())
 }
 
-func (s *Service) ListReminders(ctx context.Context, companyID, chargeID int64) ([]repository.Reminder, error) {
-	if _, err := s.Repo.GetCharge(ctx, companyID, chargeID); err != nil {
+func (s *Service) ListReminders(ctx context.Context, companyID, chargeID, memberUID int64) ([]repository.Reminder, error) {
+	if _, err := s.Repo.GetCharge(ctx, companyID, chargeID, memberUID); err != nil {
 		return nil, err
 	}
 	return s.Repo.ListReminders(ctx, chargeID)
 }
 
 // ListChargeInboundWhatsApp respuestas del cliente (WhatsApp entrante) vinculadas al cobro.
-func (s *Service) ListChargeInboundWhatsApp(ctx context.Context, companyID, chargeID int64) ([]model.Message, error) {
-	if _, err := s.Repo.GetCharge(ctx, companyID, chargeID); err != nil {
+func (s *Service) ListChargeInboundWhatsApp(ctx context.Context, companyID, chargeID, memberUID int64) ([]model.Message, error) {
+	if _, err := s.Repo.GetCharge(ctx, companyID, chargeID, memberUID); err != nil {
 		return nil, err
 	}
 	return s.Repo.ListInboundMessagesForCharge(ctx, companyID, chargeID)
 }
 
 // SimulateChargeInboundWhatsApp inserta un mensaje entrante de prueba vinculado al cobro (demo / QA).
-func (s *Service) SimulateChargeInboundWhatsApp(ctx context.Context, companyID, chargeID int64, text string) (*model.Message, error) {
-	ch, err := s.Repo.GetCharge(ctx, companyID, chargeID)
+func (s *Service) SimulateChargeInboundWhatsApp(ctx context.Context, companyID, chargeID, memberUID int64, text string) (*model.Message, error) {
+	ch, err := s.Repo.GetCharge(ctx, companyID, chargeID, memberUID)
 	if err != nil {
 		return nil, err
 	}
@@ -338,18 +345,21 @@ type PatchChargeInput struct {
 	SetPaid  *bool    `json:"set_paid"`
 }
 
-func (s *Service) PatchCharge(ctx context.Context, companyID, chargeID int64, in PatchChargeInput) error {
+func (s *Service) PatchCharge(ctx context.Context, companyID, chargeID, memberUID int64, in PatchChargeInput) error {
 	has := in.ClientID != nil || in.DueDate != nil || in.Amount != nil || in.SetPaid != nil
 	if !has {
 		return errors.New("nada que actualizar")
 	}
+	if _, err := s.Repo.GetCharge(ctx, companyID, chargeID, memberUID); err != nil {
+		return err
+	}
 	if in.ClientID != nil {
-		ok, err := s.Repo.ActiveClientBelongsToCompany(ctx, companyID, *in.ClientID)
+		ok, err := s.Repo.ActiveClientBelongsToCompany(ctx, companyID, *in.ClientID, memberUID)
 		if err != nil {
 			return err
 		}
 		if !ok {
-			return errors.New("cliente no válido o inactivo para esta empresa")
+			return errors.New("cliente no válido, inactivo o fuera de tu cartera")
 		}
 	}
 	if in.Amount != nil && *in.Amount <= 0 {
@@ -374,7 +384,7 @@ func (s *Service) PatchCharge(ctx context.Context, companyID, chargeID int64, in
 	if !*in.SetPaid {
 		return s.Repo.ClearChargePayment(ctx, companyID, chargeID)
 	}
-	ch, err := s.Repo.GetCharge(ctx, companyID, chargeID)
+	ch, err := s.Repo.GetCharge(ctx, companyID, chargeID, memberUID)
 	if err != nil {
 		return err
 	}

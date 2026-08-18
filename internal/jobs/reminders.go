@@ -45,7 +45,7 @@ func StartReminderJob(ctx context.Context, repo *repository.DB, d *notify.Dispat
 
 func runOnce(ctx context.Context, repo *repository.DB, d *notify.Dispatcher, companyID int64) {
 	log.Printf("[FlowPay Job] Inicio de ciclo de recordatorios (company_id=%d)…", companyID)
-	dueSoon, err := repo.ChargesDueSoon(ctx, companyID, 5)
+	dueSoon, err := repo.ChargesDueSoon(ctx, companyID, 5, 0)
 	if err != nil {
 		log.Println("[FlowPay Job] error due_soon:", err)
 		return
@@ -94,7 +94,7 @@ func runOnce(ctx context.Context, repo *repository.DB, d *notify.Dispatcher, com
 			}
 		}
 	}
-	overdue, err := repo.ChargesOverdueUnpaid(ctx, companyID)
+	overdue, err := repo.ChargesOverdueUnpaid(ctx, companyID, 0)
 	if err != nil {
 		log.Println("[FlowPay Job] error overdue:", err)
 		return

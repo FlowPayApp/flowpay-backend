@@ -117,16 +117,17 @@ func scanChargeClient(rows *sql.Rows, ch *Charge) error {
 	return nil
 }
 
-func (db *DB) ListCharges(ctx context.Context, companyID int64) ([]Charge, error) {
+func (db *DB) ListCharges(ctx context.Context, companyID, memberUID int64) ([]Charge, error) {
 	q := `
 SELECT i.id, i.company_id, i.client_id, i.amount, i.due_date, i.paid_at,
        i.attachment_token, i.attachment_ext, i.created_at, ` + chargeClientLabelExpr + `, c.email, c.phone, c.followup_channel
 FROM charges i
 JOIN clients c ON c.id = i.client_id
 WHERE i.company_id = $1
+  AND ($2::bigint = 0 OR COALESCE(c.assigned_to, c.created_by) = $2)
 ORDER BY i.due_date ASC, i.id ASC
 `
-	rows, err := db.db.QueryContext(ctx, q, companyID)
+	rows, err := db.db.QueryContext(ctx, q, companyID, memberUID)
 	if err != nil {
 		return nil, err
 	}
@@ -142,17 +143,18 @@ ORDER BY i.due_date ASC, i.id ASC
 	return out, rows.Err()
 }
 
-func (db *DB) GetCharge(ctx context.Context, companyID, id int64) (*Charge, error) {
+func (db *DB) GetCharge(ctx context.Context, companyID, id, memberUID int64) (*Charge, error) {
 	q := `
 SELECT i.id, i.company_id, i.client_id, i.amount, i.due_date, i.paid_at,
        i.attachment_token, i.attachment_ext, i.created_at, ` + chargeClientLabelExpr + `, c.email, c.phone, c.followup_channel
 FROM charges i
 JOIN clients c ON c.id = i.client_id
 WHERE i.company_id = $1 AND i.id = $2
+  AND ($3::bigint = 0 OR COALESCE(c.assigned_to, c.created_by) = $3)
 `
 	var ch Charge
 	var ce, cp, atok, aext sql.NullString
-	err := db.db.QueryRowContext(ctx, q, companyID, id).Scan(
+	err := db.db.QueryRowContext(ctx, q, companyID, id, memberUID).Scan(
 		&ch.ID, &ch.CompanyID, &ch.ClientID, &ch.Amount, &ch.DueDate, &ch.PaidAt,
 		&atok, &aext, &ch.CreatedAt, &ch.ClientName, &ce, &cp, &ch.ClientFollowupChannel,
 	)
@@ -246,7 +248,7 @@ func (db *DB) InsertReminder(ctx context.Context, chargeID int64, kind, channel,
 }
 
 // ChargesDueSoon: no cobrados, due_date entre hoy y hoy+days (inclusive upper bound por día).
-func (db *DB) ChargesDueSoon(ctx context.Context, companyID int64, days int) ([]Charge, error) {
+func (db *DB) ChargesDueSoon(ctx context.Context, companyID int64, days int, memberUID int64) ([]Charge, error) {
 	q := `
 SELECT i.id, i.company_id, i.client_id, i.amount, i.due_date, i.paid_at,
        i.attachment_token, i.attachment_ext, i.created_at, ` + chargeClientLabelExpr + `, c.email, c.phone, c.followup_channel
@@ -256,12 +258,13 @@ WHERE i.company_id = $1
   AND i.paid_at IS NULL
   AND i.due_date >= CURRENT_DATE
   AND i.due_date <= CURRENT_DATE + ($2::int * interval '1 day')
+  AND ($3::bigint = 0 OR COALESCE(c.assigned_to, c.created_by) = $3)
 ORDER BY i.due_date
 `
-	return db.queryCharges(ctx, q, companyID, days)
+	return db.queryCharges(ctx, q, companyID, days, memberUID)
 }
 
-func (db *DB) ChargesOverdueUnpaid(ctx context.Context, companyID int64) ([]Charge, error) {
+func (db *DB) ChargesOverdueUnpaid(ctx context.Context, companyID, memberUID int64) ([]Charge, error) {
 	q := `
 SELECT i.id, i.company_id, i.client_id, i.amount, i.due_date, i.paid_at,
        i.attachment_token, i.attachment_ext, i.created_at, ` + chargeClientLabelExpr + `, c.email, c.phone, c.followup_channel
@@ -270,9 +273,10 @@ JOIN clients c ON c.id = i.client_id
 WHERE i.company_id = $1
   AND i.paid_at IS NULL
   AND i.due_date < CURRENT_DATE
+  AND ($2::bigint = 0 OR COALESCE(c.assigned_to, c.created_by) = $2)
 ORDER BY i.due_date
 `
-	return db.queryCharges(ctx, q, companyID)
+	return db.queryCharges(ctx, q, companyID, memberUID)
 }
 
 func (db *DB) queryCharges(ctx context.Context, query string, args ...any) ([]Charge, error) {
@@ -346,11 +350,14 @@ func (db *DB) GetAttachmentExtByToken(ctx context.Context, token string) (string
 	return ext.String, nil
 }
 
-func (db *DB) ActiveClientBelongsToCompany(ctx context.Context, companyID, clientID int64) (bool, error) {
+func (db *DB) ActiveClientBelongsToCompany(ctx context.Context, companyID, clientID, memberUID int64) (bool, error) {
 	var one int
 	err := db.db.QueryRowContext(ctx,
-		`SELECT 1 FROM clients WHERE id = $1 AND company_id = $2 AND is_active = TRUE LIMIT 1`,
-		clientID, companyID,
+		`SELECT 1 FROM clients c
+WHERE c.id = $1 AND c.company_id = $2 AND c.is_active = TRUE
+  AND ($3::bigint = 0 OR COALESCE(c.assigned_to, c.created_by) = $3)
+LIMIT 1`,
+		clientID, companyID, memberUID,
 	).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
@@ -423,20 +430,22 @@ func (db *DB) ClearChargePayment(ctx context.Context, companyID, chargeID int64)
 	return tx.Commit()
 }
 
-func (db *DB) DashboardAggregate(ctx context.Context, companyID int64) (DashboardTotals, error) {
+func (db *DB) DashboardAggregate(ctx context.Context, companyID, memberUID int64) (DashboardTotals, error) {
 	var t DashboardTotals
 	q := `
 SELECT
-  COALESCE(SUM(CASE WHEN paid_at IS NOT NULL THEN amount ELSE 0 END), 0),
-  COALESCE(SUM(CASE WHEN paid_at IS NOT NULL THEN 1 ELSE 0 END), 0),
-  COALESCE(SUM(CASE WHEN paid_at IS NULL AND due_date >= CURRENT_DATE THEN amount ELSE 0 END), 0),
-  COALESCE(SUM(CASE WHEN paid_at IS NULL AND due_date >= CURRENT_DATE THEN 1 ELSE 0 END), 0),
-  COALESCE(SUM(CASE WHEN paid_at IS NULL AND due_date < CURRENT_DATE THEN amount ELSE 0 END), 0),
-  COALESCE(SUM(CASE WHEN paid_at IS NULL AND due_date < CURRENT_DATE THEN 1 ELSE 0 END), 0)
-FROM charges
-WHERE company_id = $1
+  COALESCE(SUM(CASE WHEN i.paid_at IS NOT NULL THEN i.amount ELSE 0 END), 0),
+  COALESCE(SUM(CASE WHEN i.paid_at IS NOT NULL THEN 1 ELSE 0 END), 0),
+  COALESCE(SUM(CASE WHEN i.paid_at IS NULL AND i.due_date >= CURRENT_DATE THEN i.amount ELSE 0 END), 0),
+  COALESCE(SUM(CASE WHEN i.paid_at IS NULL AND i.due_date >= CURRENT_DATE THEN 1 ELSE 0 END), 0),
+  COALESCE(SUM(CASE WHEN i.paid_at IS NULL AND i.due_date < CURRENT_DATE THEN i.amount ELSE 0 END), 0),
+  COALESCE(SUM(CASE WHEN i.paid_at IS NULL AND i.due_date < CURRENT_DATE THEN 1 ELSE 0 END), 0)
+FROM charges i
+JOIN clients c ON c.id = i.client_id
+WHERE i.company_id = $1
+  AND ($2::bigint = 0 OR COALESCE(c.assigned_to, c.created_by) = $2)
 `
-	err := db.db.QueryRowContext(ctx, q, companyID).Scan(
+	err := db.db.QueryRowContext(ctx, q, companyID, memberUID).Scan(
 		&t.PaidAmount, &t.PaidCount,
 		&t.PendingAmount, &t.PendingCount,
 		&t.OverdueAmount, &t.OverdueCount,

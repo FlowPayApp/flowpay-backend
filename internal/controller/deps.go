@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -34,13 +35,41 @@ func (d *Deps) companyID(c *gin.Context) int64 {
 }
 
 func (d *Deps) isPlatformAdmin(c *gin.Context) bool {
+	return d.role(c) == "platform_admin"
+}
+
+func (d *Deps) role(c *gin.Context) string {
 	v, ok := c.Get("role")
 	if !ok {
-		return false
+		return ""
 	}
 	role, ok := v.(string)
 	if !ok {
-		return false
+		return ""
 	}
-	return strings.TrimSpace(strings.ToLower(role)) == "platform_admin"
+	return strings.TrimSpace(strings.ToLower(role))
+}
+
+func (d *Deps) userID(c *gin.Context) int64 {
+	if v, ok := c.Get("user_id"); ok {
+		if id, ok := v.(int64); ok {
+			return id
+		}
+	}
+	return 0
+}
+
+func (d *Deps) memberUID(c *gin.Context) int64 {
+	if d.role(c) == "member" {
+		return d.userID(c)
+	}
+	return 0
+}
+
+func (d *Deps) requireCompanyAdmin(c *gin.Context) bool {
+	if d.role(c) == "admin" {
+		return true
+	}
+	c.JSON(http.StatusForbidden, gin.H{"error": "solo el administrador de la empresa puede hacer esta acción"})
+	return false
 }
