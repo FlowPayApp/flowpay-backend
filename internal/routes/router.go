@@ -28,6 +28,8 @@ func Register(r *gin.Engine, deps controller.Deps, jwtMiddleware gin.HandlerFunc
 		api.GET("/platform/overview", deps.PlatformOverview)
 		api.GET("/company/messaging", deps.GetCompanyMessaging)
 		api.PUT("/company/messaging", deps.PutCompanyMessaging)
+		api.POST("/reminder-messages", deps.CreateReminderMessage)
+		api.PATCH("/reminder-messages/:id", deps.PatchReminderMessage)
 	}
 
 	r.GET("/health", func(c *gin.Context) {

@@ -75,7 +75,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	jobs.StartReminderJob(ctx, repo, cfg.Notify, cfg.ReminderInterval)
+	jobs.StartReminderJob(ctx, repo, cfg.Notify, cfg.ReminderInterval, cfg.PaymentsURL)
 
 	srv := &http.Server{Addr: cfg.Addr, Handler: r}
 	go func() {

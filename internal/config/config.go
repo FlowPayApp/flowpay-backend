@@ -16,6 +16,7 @@ type Config struct {
 	JWTSecret             string
 	UploadDir             string
 	PublicBaseURL         string
+	PaymentsURL           string
 	Notify                *notify.Dispatcher
 	TwilioAccountSID      string
 	TwilioAuthToken       string
@@ -46,6 +47,9 @@ func Load() Config {
 
 	publicBase := strings.TrimSpace(os.Getenv("FLOWPAY_PUBLIC_BASE_URL"))
 	publicBase = strings.TrimSuffix(publicBase, "/")
+
+	paymentsURL := strings.TrimSpace(os.Getenv("FLOWPAY_PAYMENTS_URL"))
+	paymentsURL = strings.TrimSuffix(paymentsURL, "/")
 
 	uploadDir := strings.TrimSpace(os.Getenv("FLOWPAY_UPLOAD_DIR"))
 	if uploadDir == "" {
@@ -78,6 +82,7 @@ func Load() Config {
 		JWTSecret:             strings.TrimSpace(os.Getenv("FLOWPAY_JWT_SECRET")),
 		UploadDir:             uploadDir,
 		PublicBaseURL:         publicBase,
+		PaymentsURL:           paymentsURL,
 		Notify:                disp,
 		TwilioAccountSID:      strings.TrimSpace(os.Getenv("FLOWPAY_TWILIO_ACCOUNT_SID")),
 		TwilioAuthToken:       strings.TrimSpace(os.Getenv("FLOWPAY_TWILIO_AUTH_TOKEN")),
