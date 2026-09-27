@@ -137,28 +137,39 @@ func PhaseFromCharge(ch repository.Charge, now time.Time, priorOverdue int) (pha
 	return PhaseOverdueFollowUp, 0
 }
 
-// ResolveSubjectAndBody resuelve asunto y cuerpo (plantilla empresa o valores por defecto).
-func ResolveSubjectAndBody(ctx context.Context, repo *repository.DB, companyID int64, phase string, daysUntil int, priorOverdue int, ch repository.Charge) (subject string, body string, err error) {
+// ResolveReminder resuelve el correo y el WhatsApp (plantilla de la empresa o texto del sistema).
+func ResolveReminder(ctx context.Context, repo *repository.DB, companyID int64, phase string, daysUntil int, priorOverdue int, ch repository.Charge) (emailSubject, emailBody, whatsappBody string, err error) {
 	rows, err := repo.ListReminderTemplates(ctx, companyID)
 	if err != nil {
 		rows = nil
 	}
 	cm, err := repo.GetCompanyMessaging(ctx, companyID)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	payURL := buildPaymentURL(cm.PaymentURLTemplate, ch)
+	defSubject, defBody := defaultSubjectBody(phase, priorOverdue, ch)
 	t := pickTemplate(rows, phase, daysUntil)
-	if t == nil || strings.TrimSpace(t.Body) == "" {
-		subject, body = defaultSubjectBody(phase, priorOverdue, ch)
-		return subject, body, nil
+	if t == nil {
+		return defSubject, defBody, defBody, nil
 	}
-	body = ApplyPlaceholders(t.Body, ch, cm.Name, cm.TransferInstructions, payURL)
-	subject = strings.TrimSpace(t.EmailSubject)
-	if subject == "" {
-		subject, _ = defaultSubjectBody(phase, priorOverdue, ch)
+	emailBody = strings.TrimSpace(t.Body)
+	if emailBody == "" {
+		emailSubject, emailBody = defSubject, defBody
 	} else {
-		subject = ApplyPlaceholders(subject, ch, cm.Name, cm.TransferInstructions, payURL)
+		emailBody = ApplyPlaceholders(t.Body, ch, cm.Name, cm.TransferInstructions, payURL)
+		emailSubject = strings.TrimSpace(t.EmailSubject)
+		if emailSubject == "" {
+			emailSubject = defSubject
+		} else {
+			emailSubject = ApplyPlaceholders(emailSubject, ch, cm.Name, cm.TransferInstructions, payURL)
+		}
 	}
-	return subject, body, nil
+	whatsappBody = strings.TrimSpace(t.WhatsAppBody)
+	if whatsappBody == "" {
+		whatsappBody = defBody
+	} else {
+		whatsappBody = ApplyPlaceholders(t.WhatsAppBody, ch, cm.Name, cm.TransferInstructions, payURL)
+	}
+	return emailSubject, emailBody, whatsappBody, nil
 }
