@@ -15,11 +15,12 @@ type ReminderTemplateRow struct {
 	SortOrder     int    `json:"sort_order"`
 	EmailSubject  string `json:"email_subject"`
 	Body          string `json:"body"`
+	WhatsAppBody  string `json:"whatsapp_body"`
 }
 
 func (db *DB) ListReminderTemplates(ctx context.Context, companyID int64) ([]ReminderTemplateRow, error) {
 	rows, err := db.db.QueryContext(ctx, `
-SELECT id, company_id, phase, day_min, day_max, sort_order, COALESCE(email_subject,''), body
+SELECT id, company_id, phase, day_min, day_max, sort_order, COALESCE(email_subject,''), body, COALESCE(whatsapp_body,'')
 FROM company_reminder_templates
 WHERE company_id = $1
 ORDER BY phase ASC, sort_order ASC, day_min ASC, id ASC
@@ -31,7 +32,7 @@ ORDER BY phase ASC, sort_order ASC, day_min ASC, id ASC
 	var out []ReminderTemplateRow
 	for rows.Next() {
 		var t ReminderTemplateRow
-		if err := rows.Scan(&t.ID, &t.CompanyID, &t.Phase, &t.DayMin, &t.DayMax, &t.SortOrder, &t.EmailSubject, &t.Body); err != nil {
+		if err := rows.Scan(&t.ID, &t.CompanyID, &t.Phase, &t.DayMin, &t.DayMax, &t.SortOrder, &t.EmailSubject, &t.Body, &t.WhatsAppBody); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -51,13 +52,13 @@ func (db *DB) ReplaceReminderTemplates(ctx context.Context, companyID int64, lis
 	}
 	for _, t := range list {
 		ph := strings.TrimSpace(strings.ToLower(t.Phase))
-		if ph == "" || strings.TrimSpace(t.Body) == "" {
+		if ph == "" || (strings.TrimSpace(t.Body) == "" && strings.TrimSpace(t.WhatsAppBody) == "") {
 			continue
 		}
 		if _, err := tx.ExecContext(ctx, `
-INSERT INTO company_reminder_templates (company_id, phase, day_min, day_max, sort_order, email_subject, body)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-`, companyID, ph, t.DayMin, t.DayMax, t.SortOrder, strings.TrimSpace(t.EmailSubject), t.Body); err != nil {
+INSERT INTO company_reminder_templates (company_id, phase, day_min, day_max, sort_order, email_subject, body, whatsapp_body)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+`, companyID, ph, t.DayMin, t.DayMax, t.SortOrder, strings.TrimSpace(t.EmailSubject), t.Body, t.WhatsAppBody); err != nil {
 			return err
 		}
 	}

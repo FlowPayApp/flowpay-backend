@@ -68,10 +68,11 @@ func runOnce(ctx context.Context, repo *repository.DB, d *notify.Dispatcher, com
 		default:
 			continue
 		}
-		subject, body, err := remindercontent.ResolveSubjectAndBody(ctx, repo, ch.CompanyID, phase, daysUntil, 0, ch)
+		subject, body, whatsappBody, err := remindercontent.ResolveReminder(ctx, repo, ch.CompanyID, phase, daysUntil, 0, ch)
 		if err != nil {
 			log.Println("[FlowPay Job] resolve template due_soon:", err)
 			subject, body = dueSoonTemplate(ch, tn, td)
+			whatsappBody = body
 		}
 		log.Println("[FlowPay Job]", subject)
 		if ok, _ := shouldPersist(ctx, repo, ch.ID, "due_soon"); ok {
@@ -86,9 +87,9 @@ func runOnce(ctx context.Context, repo *repository.DB, d *notify.Dispatcher, com
 			}
 			if shouldSendWhatsApp(ch.ClientFollowupChannel) {
 				if d != nil {
-					d.SendReminderWhatsApp(ch, body)
+					d.SendReminderWhatsApp(ch, whatsappBody)
 				}
-				if _, err := repo.InsertReminder(ctx, ch.ID, "due_soon", "whatsapp", "sent", body, ptrNow()); err != nil {
+				if _, err := repo.InsertReminder(ctx, ch.ID, "due_soon", "whatsapp", "sent", whatsappBody, ptrNow()); err != nil {
 					log.Println("[FlowPay Job] insert reminder WA:", err)
 				}
 			}
@@ -112,10 +113,11 @@ func runOnce(ctx context.Context, repo *repository.DB, d *notify.Dispatcher, com
 		if priorOverdue == 0 {
 			phase = remindercontent.PhaseOverdueFirst
 		}
-		subject, body, err := remindercontent.ResolveSubjectAndBody(ctx, repo, ch.CompanyID, phase, 0, priorOverdue, ch)
+		subject, body, whatsappBody, err := remindercontent.ResolveReminder(ctx, repo, ch.CompanyID, phase, 0, priorOverdue, ch)
 		if err != nil {
 			log.Println("[FlowPay Job] resolve template overdue:", err)
 			subject, body = overdueTemplate(ch, priorOverdue)
+			whatsappBody = body
 		}
 		log.Println("[FlowPay Job]", subject)
 		if ok, _ := shouldPersist(ctx, repo, ch.ID, "overdue"); ok {
@@ -130,9 +132,9 @@ func runOnce(ctx context.Context, repo *repository.DB, d *notify.Dispatcher, com
 			}
 			if shouldSendWhatsApp(ch.ClientFollowupChannel) {
 				if d != nil {
-					d.SendReminderWhatsApp(ch, body)
+					d.SendReminderWhatsApp(ch, whatsappBody)
 				}
-				if _, err := repo.InsertReminder(ctx, ch.ID, "overdue", "whatsapp", "sent", body, ptrNow()); err != nil {
+				if _, err := repo.InsertReminder(ctx, ch.ID, "overdue", "whatsapp", "sent", whatsappBody, ptrNow()); err != nil {
 					log.Println("[FlowPay Job] insert reminder WA:", err)
 				}
 			}

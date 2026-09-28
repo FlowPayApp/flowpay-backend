@@ -148,12 +148,12 @@ func (s *Service) SendReminderNow(ctx context.Context, companyID, chargeID, memb
 	priorOverdue, _ := s.Repo.CountRemindersByKind(ctx, chargeID, "overdue")
 	now := time.Now()
 	phase, daysU := remindercontent.PhaseFromCharge(*ch, now, priorOverdue)
-	subj, textBody, resErr := remindercontent.ResolveSubjectAndBody(ctx, s.Repo, companyID, phase, daysU, priorOverdue, *ch)
+	subj, textBody, whatsAppMessage, resErr := remindercontent.ResolveReminder(ctx, s.Repo, companyID, phase, daysU, priorOverdue, *ch)
 	if resErr != nil {
 		subj, textBody = manualReminderTemplate(*ch, priorOverdue, now)
+		whatsAppMessage = textBody
 	}
 	emailMessage := fmt.Sprintf("Asunto: %s\n\n%s", subj, textBody)
-	whatsAppMessage := textBody
 
 	sendEmail := channel == "all" || channel == "email"
 	sendWhatsApp := channel == "all" || channel == "whatsapp"
@@ -198,6 +198,7 @@ type MessagingTemplateInput struct {
 	SortOrder    int    `json:"sort_order"`
 	EmailSubject string `json:"email_subject"`
 	Body         string `json:"body"`
+	WhatsAppBody string `json:"whatsapp_body"`
 }
 
 // SaveMessagingInput PUT /api/company/messaging
@@ -247,7 +248,7 @@ func (s *Service) SaveCompanyMessagingSettings(ctx context.Context, companyID in
 	}
 	rows := make([]repository.ReminderTemplateRow, 0, len(in.Templates))
 	for _, t := range in.Templates {
-		if strings.TrimSpace(t.Body) == "" {
+		if strings.TrimSpace(t.Body) == "" && strings.TrimSpace(t.WhatsAppBody) == "" {
 			continue
 		}
 		p := strings.ToLower(strings.TrimSpace(t.Phase))
@@ -258,6 +259,7 @@ func (s *Service) SaveCompanyMessagingSettings(ctx context.Context, companyID in
 			SortOrder:    t.SortOrder,
 			EmailSubject: t.EmailSubject,
 			Body:         t.Body,
+			WhatsAppBody: t.WhatsAppBody,
 		})
 	}
 	return s.Repo.ReplaceReminderTemplates(ctx, companyID, rows)

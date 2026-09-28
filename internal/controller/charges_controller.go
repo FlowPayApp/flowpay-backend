@@ -247,6 +247,17 @@ func (d *Deps) UploadChargeAttachment(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+func publicAttachmentName(mimeType string) string {
+	switch mimeType {
+	case "image/png":
+		return "factura.png"
+	case "image/jpeg":
+		return "factura.jpg"
+	default:
+		return "factura.pdf"
+	}
+}
+
 func (d *Deps) PublicAttachment(c *gin.Context) {
 	token := c.Param("token")
 	f, mimeType, err := d.Svc.OpenPublicAttachment(c.Request.Context(), token)
@@ -264,7 +275,12 @@ func (d *Deps) PublicAttachment(c *gin.Context) {
 		c.Status(http.StatusNotFound)
 		return
 	}
+	name := publicAttachmentName(mimeType)
+	disposition := "inline"
+	if c.Query("download") == "1" {
+		disposition = "attachment"
+	}
 	c.Header("Content-Type", mimeType)
-	c.Header("Content-Disposition", `inline; filename="cobro"`)
+	c.Header("Content-Disposition", disposition+`; filename="`+name+`"`)
 	c.DataFromReader(http.StatusOK, st.Size(), mimeType, f, nil)
 }
