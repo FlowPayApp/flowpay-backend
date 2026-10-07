@@ -26,6 +26,10 @@ func Register(r *gin.Engine, deps controller.Deps, jwtMiddleware gin.HandlerFunc
 		api.POST("/charges/:id/attachment", deps.UploadChargeAttachment)
 		api.GET("/dashboard", deps.Dashboard)
 		api.GET("/platform/overview", deps.PlatformOverview)
+		api.GET("/platform/whatsapp-numbers", deps.ListPlatformWhatsAppNumbers)
+		api.PUT("/platform/companies/:id/whatsapp", deps.PutCompanyWhatsApp)
+		api.GET("/platform/mailboxes", deps.ListPlatformMailboxes)
+		api.PUT("/platform/companies/:id/mailbox", deps.PutCompanyMailbox)
 		api.GET("/company/messaging", deps.GetCompanyMessaging)
 		api.PUT("/company/messaging", deps.PutCompanyMessaging)
 	}

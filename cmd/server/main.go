@@ -47,13 +47,20 @@ func main() {
 	if err := repo.EnsureReminderTemplateColumns(context.Background()); err != nil {
 		log.Printf("warn: columnas de plantillas de recordatorio: %v", err)
 	}
+	if err := repo.EnsureWhatsAppSchema(context.Background()); err != nil {
+		log.Printf("warn: tablas de WhatsApp: %v", err)
+	}
+	if err := repo.EnsureMailboxSchema(context.Background()); err != nil {
+		log.Printf("warn: buzones de correo: %v", err)
+	}
 	if err := os.MkdirAll(filepath.Clean(cfg.UploadDir), 0o755); err != nil {
 		log.Fatal("upload dir:", err)
 	}
 	svc := &service.Service{
-		Repo:      repo,
-		Notify:    cfg.Notify,
-		UploadDir: cfg.UploadDir,
+		Repo:         repo,
+		Notify:       cfg.Notify,
+		UploadDir:    cfg.UploadDir,
+		AppPublicURL: cfg.AppPublicURL,
 	}
 	wa := &service.WhatsAppService{Repo: repo}
 	deps := controller.Deps{
@@ -81,7 +88,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	jobs.StartReminderJob(ctx, repo, cfg.Notify, cfg.ReminderInterval)
+	jobs.StartReminderJob(ctx, repo, cfg.Notify, cfg.ReminderInterval, cfg.AppPublicURL)
 
 	srv := &http.Server{Addr: cfg.Addr, Handler: r}
 	go func() {

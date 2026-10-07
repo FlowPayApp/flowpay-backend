@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -37,9 +38,10 @@ type PlatformOverviewResponse struct {
 }
 
 type Service struct {
-	Repo      *repository.DB
-	Notify    *notify.Dispatcher
-	UploadDir string
+	Repo         *repository.DB
+	Notify       *notify.Dispatcher
+	UploadDir    string
+	AppPublicURL string
 }
 
 func (s *Service) withStatus(ch repository.Charge) ChargeDTO {
@@ -89,7 +91,14 @@ func (s *Service) CreateCharge(ctx context.Context, companyID, memberUID int64, 
 	if !ok {
 		return 0, errors.New("cliente no válido, inactivo o fuera de tu cartera")
 	}
-	return s.Repo.CreateCharge(ctx, companyID, in.ClientID, in.Amount, due)
+	id, err := s.Repo.CreateCharge(ctx, companyID, in.ClientID, in.Amount, due)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := s.Repo.EnsureClientPaymentToken(ctx, companyID, in.ClientID); err != nil {
+		log.Printf("[FlowPay] no se pudo asignar el enlace de pago a la sucursal: %v", err)
+	}
+	return id, nil
 }
 
 func (s *Service) DeleteCharge(ctx context.Context, companyID, chargeID int64) error {
@@ -148,35 +157,44 @@ func (s *Service) SendReminderNow(ctx context.Context, companyID, chargeID, memb
 	priorOverdue, _ := s.Repo.CountRemindersByKind(ctx, chargeID, "overdue")
 	now := time.Now()
 	phase, daysU := remindercontent.PhaseFromCharge(*ch, now, priorOverdue)
-	subj, textBody, whatsAppMessage, resErr := remindercontent.ResolveReminder(ctx, s.Repo, companyID, phase, daysU, priorOverdue, *ch)
+	subj, textBody, _, payURL, resErr := remindercontent.ResolveReminder(ctx, s.Repo, companyID, phase, daysU, priorOverdue, *ch, s.AppPublicURL)
 	if resErr != nil {
 		subj, textBody = manualReminderTemplate(*ch, priorOverdue, now)
-		whatsAppMessage = textBody
 	}
+	whatsAppMessage, _ := notify.BuildWhatsAppTemplate(phase, *ch, payURL, notify.TemplateSIDs{})
 	emailMessage := fmt.Sprintf("Asunto: %s\n\n%s", subj, textBody)
 
 	sendEmail := channel == "all" || channel == "email"
 	sendWhatsApp := channel == "all" || channel == "whatsapp"
 
-	if s.Notify != nil {
-		switch {
-		case sendEmail && sendWhatsApp:
-			s.Notify.SendReminderEmail(*ch, subj, textBody)
-			s.Notify.SendReminderWhatsApp(*ch, textBody)
-		case sendEmail:
-			s.Notify.SendReminderEmail(*ch, subj, textBody)
-		case sendWhatsApp:
-			s.Notify.SendReminderWhatsApp(*ch, textBody)
+	if sendEmail && s.Notify != nil {
+		if err := s.Notify.SendReminderEmailFrom(*ch, subj, textBody, s.CompanySMTP(ctx, companyID)); err != nil {
+			return err
 		}
 	}
-
 	if sendEmail {
 		if _, err := s.Repo.InsertReminder(ctx, chargeID, "manual", "email", "sent", emailMessage, &now); err != nil {
 			return err
 		}
 	}
 	if sendWhatsApp {
-		if _, err := s.Repo.InsertReminder(ctx, chargeID, "manual", "whatsapp", "sent", whatsAppMessage, &now); err != nil {
+		if s.Notify != nil {
+			from, ferr := s.Repo.FirstActiveWhatsAppToForCompany(ctx, companyID)
+			if ferr != nil && !errors.Is(ferr, sql.ErrNoRows) {
+				return ferr
+			}
+			if ferr != nil {
+				from = ""
+			}
+			preview, err := s.Notify.SendCompanyWhatsAppTemplate(*ch, from, phase, payURL)
+			if err != nil {
+				return err
+			}
+			if preview != "" {
+				whatsAppMessage.Preview = preview
+			}
+		}
+		if _, err := s.Repo.InsertReminder(ctx, chargeID, "manual", "whatsapp", "sent", whatsAppMessage.Preview, &now); err != nil {
 			return err
 		}
 	}
@@ -185,9 +203,9 @@ func (s *Service) SendReminderNow(ctx context.Context, companyID, chargeID, memb
 
 // MessagingSettingsResponse plantillas + textos globales para recordatorios.
 type MessagingSettingsResponse struct {
-	TransferInstructions string                        `json:"transfer_instructions"`
-	PaymentURLTemplate    string                        `json:"payment_url_template"`
-	Templates             []repository.ReminderTemplateRow `json:"templates"`
+	TransferInstructions string                           `json:"transfer_instructions"`
+	PaymentURLTemplate   string                           `json:"payment_url_template"`
+	Templates            []repository.ReminderTemplateRow `json:"templates"`
 }
 
 // MessagingTemplateInput fila de plantilla desde el panel.

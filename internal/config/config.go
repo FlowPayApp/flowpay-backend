@@ -16,6 +16,7 @@ type Config struct {
 	JWTSecret             string
 	UploadDir             string
 	PublicBaseURL         string
+	AppPublicURL          string
 	Notify                *notify.Dispatcher
 	TwilioAccountSID      string
 	TwilioAuthToken       string
@@ -46,6 +47,7 @@ func Load() Config {
 
 	publicBase := strings.TrimSpace(os.Getenv("FLOWPAY_PUBLIC_BASE_URL"))
 	publicBase = strings.TrimSuffix(publicBase, "/")
+	appPublic := strings.TrimSuffix(strings.TrimSpace(os.Getenv("FLOWPAY_APP_PUBLIC_URL")), "/")
 
 	uploadDir := strings.TrimSpace(os.Getenv("FLOWPAY_UPLOAD_DIR"))
 	if uploadDir == "" {
@@ -65,6 +67,12 @@ func Load() Config {
 			AccountSID: os.Getenv("FLOWPAY_TWILIO_ACCOUNT_SID"),
 			AuthToken:  os.Getenv("FLOWPAY_TWILIO_AUTH_TOKEN"),
 			WhatsFrom:  os.Getenv("FLOWPAY_TWILIO_WHATSAPP_FROM"),
+			Templates: notify.TemplateSIDs{
+				Approaching:     os.Getenv("FLOWPAY_TWILIO_TEMPLATE_APPROACHING"),
+				DueToday:        os.Getenv("FLOWPAY_TWILIO_TEMPLATE_DUE_TODAY"),
+				OverdueFirst:    os.Getenv("FLOWPAY_TWILIO_TEMPLATE_OVERDUE"),
+				OverdueFollowUp: os.Getenv("FLOWPAY_TWILIO_TEMPLATE_FOLLOWUP"),
+			},
 		},
 		WhatsAppOverride: os.Getenv("FLOWPAY_WHATSAPP_OVERRIDE"),
 		PublicBaseURL:    publicBase,
@@ -78,6 +86,7 @@ func Load() Config {
 		JWTSecret:             strings.TrimSpace(os.Getenv("FLOWPAY_JWT_SECRET")),
 		UploadDir:             uploadDir,
 		PublicBaseURL:         publicBase,
+		AppPublicURL:          appPublic,
 		Notify:                disp,
 		TwilioAccountSID:      strings.TrimSpace(os.Getenv("FLOWPAY_TWILIO_ACCOUNT_SID")),
 		TwilioAuthToken:       strings.TrimSpace(os.Getenv("FLOWPAY_TWILIO_AUTH_TOKEN")),

@@ -3,9 +3,18 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 
 	"github.com/flowpay/flowpay-backend/internal/model"
+	"github.com/jackc/pgx/v5/pgconn"
+)
+
+var (
+	// ErrCompanyMissing la empresa no existe en companies.
+	ErrCompanyMissing = errors.New("company missing")
+	// ErrWhatsAppNumberTaken el número activo ya pertenece a otra empresa.
+	ErrWhatsAppNumberTaken = errors.New("whatsapp number taken")
 )
 
 // FindWhatsAppNumberByTo busca el tenant por el número receptor (normalizado whatsapp:+...).
@@ -42,6 +51,99 @@ ORDER BY id ASC LIMIT 1
 		return "", err
 	}
 	return strings.TrimSpace(phone), nil
+}
+
+// ListActiveWhatsAppNumbers números Business activos, uno por empresa.
+func (db *DB) ListActiveWhatsAppNumbers(ctx context.Context) ([]model.WhatsAppNumber, error) {
+	rows, err := db.db.QueryContext(ctx, `
+SELECT id, company_id, phone_number, twilio_sid, status, created_at
+FROM whatsapp_numbers
+WHERE status = 'active'
+ORDER BY company_id ASC, id ASC
+`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]model.WhatsAppNumber, 0)
+	for rows.Next() {
+		var w model.WhatsAppNumber
+		if err := rows.Scan(&w.ID, &w.CompanyID, &w.PhoneNumber, &w.TwilioSID, &w.Status, &w.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+	return out, rows.Err()
+}
+
+// SetCompanyWhatsAppNumber deja un único número activo para la empresa.
+// phone vacío desasigna. El número debe ir normalizado (whatsapp:+...).
+func (db *DB) SetCompanyWhatsAppNumber(ctx context.Context, companyID int64, phone string) (*model.WhatsAppNumber, error) {
+	tx, err := db.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	var exists bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM companies WHERE id = $1)`, companyID).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, ErrCompanyMissing
+	}
+
+	phone = strings.TrimSpace(phone)
+	if phone != "" {
+		var other int64
+		err := tx.QueryRowContext(ctx, `
+SELECT company_id FROM whatsapp_numbers
+WHERE status = 'active' AND LOWER(phone_number) = LOWER($1) AND company_id <> $2
+LIMIT 1
+`, phone, companyID).Scan(&other)
+		if err == nil {
+			return nil, ErrWhatsAppNumberTaken
+		}
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+UPDATE whatsapp_numbers SET status = 'inactive'
+WHERE company_id = $1 AND status = 'active'
+`, companyID); err != nil {
+		return nil, err
+	}
+
+	if phone == "" {
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+
+	var w model.WhatsAppNumber
+	err = tx.QueryRowContext(ctx, `
+INSERT INTO whatsapp_numbers (company_id, phone_number, twilio_sid, status)
+VALUES ($1, $2, '', 'active')
+RETURNING id, company_id, phone_number, twilio_sid, status, created_at
+`, companyID, phone).Scan(&w.ID, &w.CompanyID, &w.PhoneNumber, &w.TwilioSID, &w.Status, &w.CreatedAt)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return nil, ErrWhatsAppNumberTaken
+		}
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &w, nil
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 
 // GetMessageByID mensaje por id y empresa (cualquier dirección).

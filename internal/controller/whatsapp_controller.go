@@ -4,8 +4,10 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 
+	"github.com/flowpay/flowpay-backend/internal/model"
 	"github.com/flowpay/flowpay-backend/internal/service"
 	"github.com/flowpay/flowpay-backend/internal/twiliovalidate"
 	"github.com/gin-gonic/gin"
@@ -15,6 +17,68 @@ import (
 type TwilioWebhookDeps struct {
 	AuthToken               string
 	ValidateTwilioSignature bool
+}
+
+func (d *Deps) ListPlatformWhatsAppNumbers(c *gin.Context) {
+	if !d.isPlatformAdmin(c) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "sin permisos de platform_admin"})
+		return
+	}
+	if d.WhatsApp == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "whatsapp no configurado"})
+		return
+	}
+	list, err := d.WhatsApp.ListActiveNumbers(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if list == nil {
+		list = []model.WhatsAppNumber{}
+	}
+	c.JSON(http.StatusOK, list)
+}
+
+func (d *Deps) PutCompanyWhatsApp(c *gin.Context) {
+	if !d.isPlatformAdmin(c) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "sin permisos de platform_admin"})
+		return
+	}
+	if d.WhatsApp == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "whatsapp no configurado"})
+		return
+	}
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "empresa inválida"})
+		return
+	}
+	var body struct {
+		PhoneNumber string `json:"phone_number"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "JSON inválido"})
+		return
+	}
+	w, err := d.WhatsApp.AssignCompanyNumber(c.Request.Context(), id, body.PhoneNumber)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrInvalidWhatsAppNumber):
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		case errors.Is(err, service.ErrCompanyNotFound):
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		case errors.Is(err, service.ErrWhatsAppNumberInUse):
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		}
+		return
+	}
+	if w == nil {
+		c.JSON(http.StatusOK, gin.H{"company_id": id, "phone_number": ""})
+		return
+	}
+	c.JSON(http.StatusOK, w)
 }
 
 func (d *Deps) TwilioWhatsAppWebhook(c *gin.Context) {
