@@ -116,6 +116,38 @@ func (d *Deps) ListReminders(c *gin.Context) {
 	c.JSON(http.StatusOK, list)
 }
 
+type replyWhatsAppBody struct {
+	Text string `json:"text"`
+}
+
+func (d *Deps) ReplyChargeWhatsApp(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad id"})
+		return
+	}
+	var body replyWhatsAppBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "json inválido"})
+		return
+	}
+	m, err := d.Svc.ReplyChargeWhatsApp(c.Request.Context(), d.companyID(c), id, d.memberUID(c), body.Text)
+	if err != nil {
+		switch {
+		case service.ErrNotFound(err):
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		case errors.Is(err, service.ErrWhatsAppReplyEmpty), errors.Is(err, service.ErrWhatsAppReplyLong):
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		case errors.Is(err, service.ErrWhatsAppReplyWindow), errors.Is(err, service.ErrWhatsAppReplyPhone):
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		default:
+			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		}
+		return
+	}
+	c.JSON(http.StatusOK, m)
+}
+
 func (d *Deps) ListChargeInboundWhatsApp(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {

@@ -120,6 +120,11 @@ func (d *Dispatcher) SendCompanyWhatsAppTemplate(ch repository.Charge, from, pha
 	return msg.Preview, nil
 }
 
+// SendCompanyWhatsAppText envía un texto libre, sin adjuntar la factura del cobro.
+func (d *Dispatcher) SendCompanyWhatsAppText(ch repository.Charge, body, from string) error {
+	return d.sendWhatsAppFrom(from, d.resolveWhatsApp(ch.ClientPhone), body, nil)
+}
+
 // SendCompanyWhatsApp envía desde el WhatsApp Business de la empresa (from vacío cae al número global).
 func (d *Dispatcher) SendCompanyWhatsApp(ch repository.Charge, body, from string) error {
 	media := d.whatsAppMediaURLs(ch)

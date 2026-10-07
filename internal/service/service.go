@@ -311,6 +311,76 @@ func (s *Service) ListReminders(ctx context.Context, companyID, chargeID, member
 	return s.Repo.ListReminders(ctx, chargeID)
 }
 
+var (
+	// ErrWhatsAppReplyWindow el cliente no escribió en las últimas 24 horas.
+	ErrWhatsAppReplyWindow = errors.New("pasaron más de 24 horas desde el último mensaje del cliente. Usa Enviar recordatorio ahora")
+	// ErrWhatsAppReplyPhone el cobro no tiene teléfono.
+	ErrWhatsAppReplyPhone = errors.New("este cobro no tiene teléfono de WhatsApp")
+	// ErrWhatsAppReplyEmpty el texto viene vacío.
+	ErrWhatsAppReplyEmpty = errors.New("escribe un mensaje")
+	// ErrWhatsAppReplyLong el texto supera el límite.
+	ErrWhatsAppReplyLong = errors.New("el mensaje puede tener hasta 1000 caracteres")
+)
+
+// ReplyChargeWhatsApp envía un texto libre al cliente si escribió en las últimas 24 horas.
+func (s *Service) ReplyChargeWhatsApp(ctx context.Context, companyID, chargeID, memberUID int64, text string) (*model.Message, error) {
+	ch, err := s.Repo.GetCharge(ctx, companyID, chargeID, memberUID)
+	if err != nil {
+		return nil, err
+	}
+	msg := strings.TrimSpace(text)
+	if msg == "" {
+		return nil, ErrWhatsAppReplyEmpty
+	}
+	if len([]rune(msg)) > 1000 {
+		return nil, ErrWhatsAppReplyLong
+	}
+	if ch.ClientPhone == nil || strings.TrimSpace(*ch.ClientPhone) == "" {
+		return nil, ErrWhatsAppReplyPhone
+	}
+	if s.Notify == nil {
+		return nil, errors.New("WhatsApp no está configurado")
+	}
+	since := time.Now().Add(-24 * time.Hour)
+	open, err := s.Repo.HasInboundFromPhoneSince(ctx, companyID, *ch.ClientPhone, since)
+	if err != nil {
+		return nil, err
+	}
+	if !open {
+		return nil, ErrWhatsAppReplyWindow
+	}
+	from := ""
+	if tn, ferr := s.Repo.FirstActiveWhatsAppToForCompany(ctx, companyID); ferr == nil {
+		from = strings.TrimSpace(tn)
+	} else if !errors.Is(ferr, sql.ErrNoRows) {
+		return nil, ferr
+	}
+	if err := s.Notify.SendCompanyWhatsAppText(*ch, msg, from); err != nil {
+		return nil, err
+	}
+	to := notify.NormalizeWhatsAppForTwilio(*ch.ClientPhone)
+	cid := chargeID
+	saved := &model.Message{
+		CompanyID:  companyID,
+		ChargeID:   &cid,
+		FromNumber: from,
+		ToNumber:   to,
+		Content:    msg,
+		Direction:  "outbound",
+		Status:     "sent",
+	}
+	id, err := s.Repo.InsertMessage(ctx, saved)
+	if err != nil {
+		log.Printf("[FlowPay WhatsApp] respuesta enviada pero no se guardó charge=%d: %v", chargeID, err)
+		return saved, nil
+	}
+	got, err := s.Repo.GetMessageByID(ctx, companyID, id)
+	if err != nil {
+		return saved, nil
+	}
+	return got, nil
+}
+
 // ListChargeInboundWhatsApp respuestas del cliente (WhatsApp entrante) vinculadas al cobro.
 func (s *Service) ListChargeInboundWhatsApp(ctx context.Context, companyID, chargeID, memberUID int64) ([]model.Message, error) {
 	if _, err := s.Repo.GetCharge(ctx, companyID, chargeID, memberUID); err != nil {

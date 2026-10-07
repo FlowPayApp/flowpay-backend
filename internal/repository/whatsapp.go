@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/flowpay/flowpay-backend/internal/model"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -200,12 +201,12 @@ ORDER BY ch.created_at DESC, ch.id DESC
 	return nil, nil
 }
 
-// ListInboundMessagesForCharge mensajes entrantes de WhatsApp asociados al cobro.
+// ListInboundMessagesForCharge mensajes de WhatsApp del cobro: respuestas del cliente y textos enviados desde la ficha.
 func (db *DB) ListInboundMessagesForCharge(ctx context.Context, companyID, chargeID int64) ([]model.Message, error) {
 	q := `
 SELECT id, company_id, charge_id, from_number, to_number, content, direction, status, created_at
 FROM messages
-WHERE company_id = $1 AND charge_id = $2 AND direction = 'inbound'
+WHERE company_id = $1 AND charge_id = $2 AND direction IN ('inbound', 'outbound')
 ORDER BY created_at DESC, id DESC
 `
 	rows, err := db.db.QueryContext(ctx, q, companyID, chargeID)
@@ -227,6 +228,31 @@ ORDER BY created_at DESC, id DESC
 		out = append(out, m)
 	}
 	return out, rows.Err()
+}
+
+// HasInboundFromPhoneSince indica si ese teléfono escribió a la empresa desde since.
+func (db *DB) HasInboundFromPhoneSince(ctx context.Context, companyID int64, phone string, since time.Time) (bool, error) {
+	rows, err := db.db.QueryContext(ctx, `
+SELECT from_number
+FROM messages
+WHERE company_id = $1 AND direction = 'inbound' AND created_at >= $2
+ORDER BY created_at DESC
+LIMIT 300
+`, companyID, since)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var from string
+		if err := rows.Scan(&from); err != nil {
+			return false, err
+		}
+		if phonesLikelyMatch(from, phone) {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // InsertMessage guarda un mensaje de WhatsApp.

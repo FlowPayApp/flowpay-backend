@@ -21,6 +21,7 @@ func Register(r *gin.Engine, deps controller.Deps, jwtMiddleware gin.HandlerFunc
 		api.DELETE("/charges/:id", deps.DeleteCharge)
 		api.GET("/charges/:id/reminders", deps.ListReminders)
 		api.GET("/charges/:id/inbound-whatsapp", deps.ListChargeInboundWhatsApp)
+		api.POST("/charges/:id/whatsapp", deps.ReplyChargeWhatsApp)
 		api.POST("/charges/:id/inbound-whatsapp/simulate", deps.SimulateChargeInboundWhatsApp)
 		api.POST("/charges/:id/reminders", deps.SendReminder)
 		api.POST("/charges/:id/attachment", deps.UploadChargeAttachment)
