@@ -75,8 +75,12 @@ func main() {
 	}
 
 	r := gin.Default()
+	r.Use(func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
+		c.Next()
+	})
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"http://localhost:5173", "http://127.0.0.1:5173"},
+		AllowOriginFunc:  allowBrowserOrigin,
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
 		ExposeHeaders:    []string{"Content-Length"},
@@ -161,6 +165,19 @@ func printStartupStatus(db *sql.DB, addr, dsn string, reminderInterval time.Dura
 
 	log.Printf(cyan+"║"+reset+" %s", fmt.Sprintf("%sAPI base: /api/*%s", bold, reset))
 	log.Println(cyan + "╚══════════════════════════════════════════════════════╝" + reset)
+}
+
+func allowBrowserOrigin(origin string) bool {
+	switch origin {
+	case "http://localhost:5173", "http://127.0.0.1:5173", "https://geldflus.com", "https://www.geldflus.com":
+		return true
+	}
+	for _, extra := range strings.Split(os.Getenv("FLOWPAY_CORS_ORIGINS"), ",") {
+		if strings.TrimSpace(extra) == origin && origin != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func safeDSN(raw string) string {

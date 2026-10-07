@@ -33,10 +33,7 @@ func Load() Config {
 	if dsn == "" {
 		dsn = "postgres://flowpay:flowpay@127.0.0.1:5432/flowpay?sslmode=disable"
 	}
-	addr := os.Getenv("FLOWPAY_ADDR")
-	if addr == "" {
-		addr = ":8080"
-	}
+	addr := listenAddr("FLOWPAY_ADDR", ":8080")
 	ri := os.Getenv("FLOWPAY_REMINDER_INTERVAL")
 	interval := 24 * time.Hour
 	if ri != "" {
@@ -45,9 +42,8 @@ func Load() Config {
 		}
 	}
 
-	publicBase := strings.TrimSpace(os.Getenv("FLOWPAY_PUBLIC_BASE_URL"))
-	publicBase = strings.TrimSuffix(publicBase, "/")
-	appPublic := strings.TrimSuffix(strings.TrimSpace(os.Getenv("FLOWPAY_APP_PUBLIC_URL")), "/")
+	publicBase := publicURL("FLOWPAY_PUBLIC_BASE_URL")
+	appPublic := publicURL("FLOWPAY_APP_PUBLIC_URL")
 
 	uploadDir := strings.TrimSpace(os.Getenv("FLOWPAY_UPLOAD_DIR"))
 	if uploadDir == "" {
@@ -92,4 +88,34 @@ func Load() Config {
 		TwilioAuthToken:       strings.TrimSpace(os.Getenv("FLOWPAY_TWILIO_AUTH_TOKEN")),
 		TwilioValidateWebhook: envBool("FLOWPAY_TWILIO_VALIDATE_WEBHOOK"),
 	}
+}
+
+const productionOrigin = "https://geldflus.com"
+
+func onPlatform() bool {
+	return strings.TrimSpace(os.Getenv("PORT")) != ""
+}
+
+func listenAddr(primaryKey, fallback string) string {
+	if v := strings.TrimSpace(os.Getenv(primaryKey)); v != "" {
+		return v
+	}
+	if p := strings.TrimSpace(os.Getenv("PORT")); p != "" {
+		if strings.HasPrefix(p, ":") {
+			return p
+		}
+		return ":" + p
+	}
+	return fallback
+}
+
+func publicURL(key string) string {
+	v := strings.TrimSuffix(strings.TrimSpace(os.Getenv(key)), "/")
+	if v != "" {
+		return v
+	}
+	if onPlatform() {
+		return productionOrigin
+	}
+	return ""
 }
