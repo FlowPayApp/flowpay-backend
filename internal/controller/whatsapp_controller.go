@@ -95,18 +95,8 @@ func (d *Deps) TwilioWhatsAppWebhook(c *gin.Context) {
 	form := c.Request.PostForm
 
 	if d.TwilioWebhook.ValidateTwilioSignature && strings.TrimSpace(d.TwilioWebhook.AuthToken) != "" {
-		sig := c.GetHeader("X-Twilio-Signature")
-		validator := twiliovalidate.RequestValidator{AuthToken: d.TwilioWebhook.AuthToken}
-		candidates := twilioWebhookURLs(c, d.TwilioWebhook.PublicBaseURLs)
-		signedURL := ""
-		for _, u := range candidates {
-			if validator.Validate(sig, u, form) {
-				signedURL = u
-				break
-			}
-		}
-		if signedURL == "" {
-			log.Printf("[FlowPay WhatsApp] webhook firma inválida (probadas: %s)", strings.Join(candidates, ", "))
+		signedURL, ok := d.twilioSignedURL(c, form)
+		if !ok {
 			c.Status(http.StatusForbidden)
 			return
 		}
@@ -139,6 +129,53 @@ func (d *Deps) TwilioWhatsAppWebhook(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusOK)
+}
+
+// twilioSignedURL devuelve la URL con la que Twilio firmó la petición, si la firma es válida.
+func (d *Deps) twilioSignedURL(c *gin.Context, form url.Values) (string, bool) {
+	sig := c.GetHeader("X-Twilio-Signature")
+	validator := twiliovalidate.RequestValidator{AuthToken: d.TwilioWebhook.AuthToken}
+	candidates := twilioWebhookURLs(c, d.TwilioWebhook.PublicBaseURLs)
+	for _, u := range candidates {
+		if validator.Validate(sig, u, form) {
+			return u, true
+		}
+	}
+	log.Printf("[FlowPay WhatsApp] webhook firma inválida path=%s (probadas: %s)", c.Request.URL.Path, strings.Join(candidates, ", "))
+	return "", false
+}
+
+// TwilioStatusWebhook recibe los avisos de entrega de los WhatsApp enviados (StatusCallback).
+// Siempre exige la firma de Twilio: sin ella cualquiera podría marcar mensajes como leídos.
+func (d *Deps) TwilioStatusWebhook(c *gin.Context) {
+	if err := c.Request.ParseForm(); err != nil {
+		c.Status(http.StatusBadRequest)
+		return
+	}
+	form := c.Request.PostForm
+	if strings.TrimSpace(d.TwilioWebhook.AuthToken) == "" {
+		c.Status(http.StatusForbidden)
+		return
+	}
+	if _, ok := d.twilioSignedURL(c, form); !ok {
+		c.Status(http.StatusForbidden)
+		return
+	}
+	if d.WhatsApp == nil {
+		c.Status(http.StatusNoContent)
+		return
+	}
+	sid := form.Get("MessageSid")
+	status := form.Get("MessageStatus")
+	if err := d.WhatsApp.HandleDeliveryStatus(c.Request.Context(), sid, status, form.Get("ErrorCode")); err != nil {
+		log.Printf("[FlowPay WhatsApp] estado sid=%s status=%s: %v", sid, status, err)
+		c.Status(http.StatusInternalServerError)
+		return
+	}
+	if code := form.Get("ErrorCode"); code != "" {
+		log.Printf("[FlowPay WhatsApp] estado sid=%s status=%s error=%s", sid, status, code)
+	}
+	c.Status(http.StatusNoContent)
 }
 
 // Twilio admite hasta 10 adjuntos por mensaje.

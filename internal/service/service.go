@@ -178,6 +178,7 @@ func (s *Service) SendReminderNow(ctx context.Context, companyID, chargeID, memb
 		}
 	}
 	if sendWhatsApp {
+		var delivery notify.SentWhatsApp
 		if s.Notify != nil {
 			from, ferr := s.Repo.FirstActiveWhatsAppToForCompany(ctx, companyID)
 			if ferr != nil && !errors.Is(ferr, sql.ErrNoRows) {
@@ -186,16 +187,23 @@ func (s *Service) SendReminderNow(ctx context.Context, companyID, chargeID, memb
 			if ferr != nil {
 				from = ""
 			}
-			preview, err := s.Notify.SendCompanyWhatsAppTemplate(*ch, from, phase, payURL)
+			preview, sent, err := s.Notify.SendCompanyWhatsAppTemplate(*ch, from, phase, payURL)
 			if err != nil {
 				return err
 			}
 			if preview != "" {
 				whatsAppMessage.Preview = preview
 			}
+			delivery = sent
 		}
-		if _, err := s.Repo.InsertReminder(ctx, chargeID, "manual", "whatsapp", "sent", whatsAppMessage.Preview, &now); err != nil {
+		id, err := s.Repo.InsertReminder(ctx, chargeID, "manual", "whatsapp", "sent", whatsAppMessage.Preview, &now)
+		if err != nil {
 			return err
+		}
+		if delivery.SID != "" {
+			if err := s.Repo.SetReminderDelivery(ctx, id, delivery.SID, delivery.Status); err != nil {
+				log.Printf("[FlowPay WhatsApp] recordatorio %d sin seguimiento de entrega: %v", id, err)
+			}
 		}
 	}
 	return nil
@@ -365,24 +373,30 @@ func (s *Service) ReplyChargeWhatsApp(ctx context.Context, companyID, chargeID, 
 	if err != nil {
 		return nil, err
 	}
-	if err := s.Notify.SendCompanyWhatsAppText(*ch, msg, from); err != nil {
+	sent, err := s.Notify.SendCompanyWhatsAppText(*ch, msg, from)
+	if err != nil {
 		return nil, err
 	}
-	return s.saveOutboundMessage(ctx, companyID, chargeID, from, *ch.ClientPhone, msg, nil)
+	return s.saveOutboundMessage(ctx, companyID, chargeID, from, *ch.ClientPhone, msg, nil, sent)
 }
 
-func (s *Service) saveOutboundMessage(ctx context.Context, companyID, chargeID int64, from, clientPhone, msg string, media []model.MessageMedia) (*model.Message, error) {
+func (s *Service) saveOutboundMessage(ctx context.Context, companyID, chargeID int64, from, clientPhone, msg string, media []model.MessageMedia, sent notify.SentWhatsApp) (*model.Message, error) {
 	to := notify.NormalizeWhatsAppForTwilio(clientPhone)
 	cid := chargeID
+	status := sent.Status
+	if status == "" {
+		status = "sent"
+	}
 	saved := &model.Message{
-		CompanyID:  companyID,
-		ChargeID:   &cid,
-		FromNumber: from,
-		ToNumber:   to,
-		Content:    msg,
-		Media:      media,
-		Direction:  "outbound",
-		Status:     "sent",
+		CompanyID:   companyID,
+		ChargeID:    &cid,
+		FromNumber:  from,
+		ToNumber:    to,
+		Content:     msg,
+		Media:       media,
+		Direction:   "outbound",
+		Status:      status,
+		ProviderSID: sent.SID,
 	}
 	id, err := s.Repo.InsertMessage(ctx, saved)
 	if err != nil {

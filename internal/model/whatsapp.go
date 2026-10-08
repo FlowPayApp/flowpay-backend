@@ -22,9 +22,12 @@ type Message struct {
 	Content    string         `json:"content"`
 	Media      []MessageMedia `json:"media"`
 	Direction  string         `json:"direction"`
-	Status     string         `json:"status"`
-	ReadAt     *time.Time     `json:"read_at,omitempty"`
-	CreatedAt  time.Time      `json:"created_at"`
+	// Status en los enviados sigue la entrega en Twilio: queued, sent, delivered, read, failed, undelivered.
+	Status        string     `json:"status"`
+	DeliveryError string     `json:"delivery_error,omitempty"`
+	ProviderSID   string     `json:"-"`
+	ReadAt        *time.Time `json:"read_at,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
 }
 
 // MessageMedia es un adjunto de WhatsApp (foto, audio, PDF...).

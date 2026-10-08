@@ -94,10 +94,8 @@ func runOnce(ctx context.Context, repo *repository.DB, d *notify.Dispatcher, com
 				}
 			}
 			if shouldSendWhatsApp(ch.ClientFollowupChannel) {
-				if preview, ok := sendCompanyWhatsAppTemplate(d, ch, waFrom, phase, payURL); ok {
-					if _, err := repo.InsertReminder(ctx, ch.ID, "due_soon", "whatsapp", "sent", preview, ptrNow()); err != nil {
-						log.Println("[FlowPay Job] insert reminder WA:", err)
-					}
+				if preview, sent, ok := sendCompanyWhatsAppTemplate(d, ch, waFrom, phase, payURL); ok {
+					saveWhatsAppReminder(ctx, repo, ch.ID, "due_soon", preview, sent)
 				}
 			}
 		}
@@ -136,10 +134,8 @@ func runOnce(ctx context.Context, repo *repository.DB, d *notify.Dispatcher, com
 				}
 			}
 			if shouldSendWhatsApp(ch.ClientFollowupChannel) {
-				if preview, ok := sendCompanyWhatsAppTemplate(d, ch, waFrom, phase, payURL); ok {
-					if _, err := repo.InsertReminder(ctx, ch.ID, "overdue", "whatsapp", "sent", preview, ptrNow()); err != nil {
-						log.Println("[FlowPay Job] insert reminder WA:", err)
-					}
+				if preview, sent, ok := sendCompanyWhatsAppTemplate(d, ch, waFrom, phase, payURL); ok {
+					saveWhatsAppReminder(ctx, repo, ch.ID, "overdue", preview, sent)
 				}
 			}
 		}
@@ -239,22 +235,36 @@ func sendCompanyEmail(d *notify.Dispatcher, ch repository.Charge, subject, body 
 	return true
 }
 
-func sendCompanyWhatsAppTemplate(d *notify.Dispatcher, ch repository.Charge, from, phase, payURL string) (string, bool) {
+func sendCompanyWhatsAppTemplate(d *notify.Dispatcher, ch repository.Charge, from, phase, payURL string) (string, notify.SentWhatsApp, bool) {
 	msg, ok := notify.BuildWhatsAppTemplate(phase, ch, payURL, notify.TemplateSIDs{})
 	if !ok {
 		log.Println("[FlowPay Job] WhatsApp: fase sin plantilla", phase)
-		return "", false
+		return "", notify.SentWhatsApp{}, false
 	}
 	if d == nil {
-		return msg.Preview, true
+		return msg.Preview, notify.SentWhatsApp{}, true
 	}
-	preview, err := d.SendCompanyWhatsAppTemplate(ch, from, phase, payURL)
+	preview, sent, err := d.SendCompanyWhatsAppTemplate(ch, from, phase, payURL)
 	if err != nil {
 		log.Println("[FlowPay Job] WhatsApp:", err)
-		return "", false
+		return "", notify.SentWhatsApp{}, false
 	}
 	if preview == "" {
 		preview = msg.Preview
 	}
-	return preview, true
+	return preview, sent, true
+}
+
+func saveWhatsAppReminder(ctx context.Context, repo *repository.DB, chargeID int64, kind, preview string, sent notify.SentWhatsApp) {
+	id, err := repo.InsertReminder(ctx, chargeID, kind, "whatsapp", "sent", preview, ptrNow())
+	if err != nil {
+		log.Println("[FlowPay Job] insert reminder WA:", err)
+		return
+	}
+	if sent.SID == "" {
+		return
+	}
+	if err := repo.SetReminderDelivery(ctx, id, sent.SID, sent.Status); err != nil {
+		log.Println("[FlowPay Job] seguimiento de entrega WA:", err)
+	}
 }

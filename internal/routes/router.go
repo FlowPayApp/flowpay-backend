@@ -11,6 +11,7 @@ func Register(r *gin.Engine, deps controller.Deps, jwtMiddleware gin.HandlerFunc
 	r.GET("/api/public/attachments/:token", deps.PublicAttachment)
 	r.GET("/api/public/chat-files/:token/:name", deps.PublicChatFile)
 	r.POST("/api/webhooks/twilio/whatsapp", deps.TwilioWhatsAppWebhook)
+	r.POST("/api/webhooks/twilio/status", deps.TwilioStatusWebhook)
 
 	api := r.Group("/api")
 	api.Use(jwtMiddleware)

@@ -34,6 +34,26 @@ func (db *DB) EnsureReminderTemplateColumns(ctx context.Context) error {
 	return nil
 }
 
+// EnsureDeliverySchema guarda el id de Twilio de cada WhatsApp enviado y lo que Twilio informa de su entrega.
+// En messages el estado vive en status; en reminders, status sigue siendo el del recordatorio (sent/scheduled).
+func (db *DB) EnsureDeliverySchema(ctx context.Context) error {
+	stmts := []string{
+		`ALTER TABLE messages ADD COLUMN IF NOT EXISTS provider_sid TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE messages ADD COLUMN IF NOT EXISTS delivery_error TEXT NOT NULL DEFAULT ''`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_provider_sid ON messages (provider_sid) WHERE provider_sid <> ''`,
+		`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS provider_sid TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS delivery_status TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS delivery_error TEXT NOT NULL DEFAULT ''`,
+		`CREATE INDEX IF NOT EXISTS idx_reminders_provider_sid ON reminders (provider_sid) WHERE provider_sid <> ''`,
+	}
+	for _, q := range stmts {
+		if _, err := db.db.ExecContext(ctx, q); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // EnsureMailboxSchema guarda el buzón SMTP con el que cada empresa envía recordatorios.
 func (db *DB) EnsureMailboxSchema(ctx context.Context) error {
 	stmts := []string{

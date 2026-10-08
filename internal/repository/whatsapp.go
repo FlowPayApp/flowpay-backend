@@ -179,7 +179,7 @@ func decodeMedia(raw []byte) []model.MessageMedia {
 	return out
 }
 
-const messageColumns = `id, company_id, charge_id, from_number, to_number, content, media, direction, status, read_at, created_at`
+const messageColumns = `id, company_id, charge_id, from_number, to_number, content, media, direction, status, delivery_error, read_at, created_at`
 
 type rowScanner interface {
 	Scan(dest ...any) error
@@ -190,7 +190,7 @@ func scanMessage(row rowScanner) (*model.Message, error) {
 	var charge sql.NullInt64
 	var readAt sql.NullTime
 	var media []byte
-	if err := row.Scan(&m.ID, &m.CompanyID, &charge, &m.FromNumber, &m.ToNumber, &m.Content, &media, &m.Direction, &m.Status, &readAt, &m.CreatedAt); err != nil {
+	if err := row.Scan(&m.ID, &m.CompanyID, &charge, &m.FromNumber, &m.ToNumber, &m.Content, &media, &m.Direction, &m.Status, &m.DeliveryError, &readAt, &m.CreatedAt); err != nil {
 		return nil, err
 	}
 	if charge.Valid {
@@ -398,11 +398,47 @@ func (db *DB) InsertMessage(ctx context.Context, m *model.Message) (int64, error
 	}
 	var id int64
 	err = db.db.QueryRowContext(ctx,
-		`INSERT INTO messages (company_id, charge_id, from_number, to_number, content, media, direction, status) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8) RETURNING id`,
-		m.CompanyID, chargeID, m.FromNumber, m.ToNumber, m.Content, media, m.Direction, m.Status,
+		`INSERT INTO messages (company_id, charge_id, from_number, to_number, content, media, direction, status, provider_sid) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9) RETURNING id`,
+		m.CompanyID, chargeID, m.FromNumber, m.ToNumber, m.Content, media, m.Direction, m.Status, m.ProviderSID,
 	).Scan(&id)
 	if err != nil {
 		return 0, err
 	}
 	return id, nil
+}
+
+// deliveryRank ordena los estados de Twilio: los avisos pueden llegar desordenados
+// y un "sent" tardío no debe tapar un "read".
+func deliveryRank(column string) string {
+	return `CASE ` + column + `
+		WHEN 'read' THEN 5
+		WHEN 'delivered' THEN 4
+		WHEN 'failed' THEN 3
+		WHEN 'undelivered' THEN 3
+		WHEN 'sent' THEN 2
+		WHEN 'queued' THEN 1
+		WHEN 'accepted' THEN 1
+		ELSE 0 END`
+}
+
+// UpdateWhatsAppDelivery aplica un aviso de estado de Twilio al mensaje o recordatorio con ese sid.
+// Devuelve cuántas filas cambió (0 si el sid no es nuestro o el estado ya era igual o más avanzado).
+func (db *DB) UpdateWhatsAppDelivery(ctx context.Context, sid, status, errorCode string) (int64, error) {
+	res, err := db.db.ExecContext(ctx, `
+UPDATE messages SET status = $2, delivery_error = $3
+WHERE provider_sid = $1 AND direction = 'outbound' AND `+deliveryRank("status")+` < `+deliveryRank("$2::text"),
+		sid, status, errorCode)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	res, err = db.db.ExecContext(ctx, `
+UPDATE reminders SET delivery_status = $2, delivery_error = $3
+WHERE provider_sid = $1 AND `+deliveryRank("delivery_status")+` < `+deliveryRank("$2::text"),
+		sid, status, errorCode)
+	if err != nil {
+		return n, err
+	}
+	m, _ := res.RowsAffected()
+	return n + m, nil
 }

@@ -50,6 +50,9 @@ func main() {
 	if err := repo.EnsureWhatsAppSchema(context.Background()); err != nil {
 		log.Printf("warn: tablas de WhatsApp: %v", err)
 	}
+	if err := repo.EnsureDeliverySchema(context.Background()); err != nil {
+		log.Printf("warn: estado de entrega de WhatsApp: %v", err)
+	}
 	if err := repo.EnsureMailboxSchema(context.Background()); err != nil {
 		log.Printf("warn: buzones de correo: %v", err)
 	}

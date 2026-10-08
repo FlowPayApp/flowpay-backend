@@ -43,6 +43,32 @@ type WhatsAppService struct {
 	AuthToken  string
 }
 
+// Estados de entrega de Twilio que se guardan; los intermedios (sending, scheduled...) no cambian lo que ve el panel.
+var deliveryStatuses = map[string]bool{
+	"queued":      true,
+	"accepted":    true,
+	"sent":        true,
+	"delivered":   true,
+	"read":        true,
+	"failed":      true,
+	"undelivered": true,
+}
+
+// HandleDeliveryStatus aplica el aviso de Twilio al WhatsApp enviado con ese sid.
+func (s *WhatsAppService) HandleDeliveryStatus(ctx context.Context, sid, status, errorCode string) error {
+	sid = strings.TrimSpace(sid)
+	status = strings.ToLower(strings.TrimSpace(status))
+	if sid == "" || !deliveryStatuses[status] {
+		return nil
+	}
+	errorCode = strings.TrimSpace(errorCode)
+	if len(errorCode) > 20 {
+		errorCode = errorCode[:20]
+	}
+	_, err := s.Repo.UpdateWhatsAppDelivery(ctx, sid, status, errorCode)
+	return err
+}
+
 // HandleInbound guarda mensaje entrante enrutado por número receptor (To).
 func (s *WhatsAppService) HandleInbound(ctx context.Context, fromRaw, toRaw, body string, media []model.MessageMedia) error {
 	toNorm := canonicalWhatsApp(toRaw)

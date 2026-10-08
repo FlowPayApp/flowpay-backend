@@ -107,14 +107,15 @@ func (s *Service) SendChargeWhatsAppFile(ctx context.Context, companyID, chargeI
 	}
 	// El nombre al final de la URL es el que WhatsApp le muestra al cliente en los PDF.
 	mediaURL := base + "/api/public/chat-files/" + token + "/" + url.PathEscape(name)
-	if err := s.Notify.SendCompanyWhatsAppFile(*ch, caption, from, mediaURL); err != nil {
+	sent, err := s.Notify.SendCompanyWhatsAppFile(*ch, caption, from, mediaURL)
+	if err != nil {
 		if derr := s.Repo.DeleteMessageFile(ctx, companyID, token); derr != nil {
 			log.Printf("[FlowPay WhatsApp] archivo no enviado y no se pudo borrar token=%s: %v", token, derr)
 		}
 		return nil, err
 	}
 	media := []model.MessageMedia{{ContentType: contentType, FileName: name, FileToken: token}}
-	return s.saveOutboundMessage(ctx, companyID, chargeID, from, *ch.ClientPhone, caption, media)
+	return s.saveOutboundMessage(ctx, companyID, chargeID, from, *ch.ClientPhone, caption, media, sent)
 }
 
 // OpenPublicChatFile entrega a Twilio el archivo recién enviado.
