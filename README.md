@@ -47,7 +47,8 @@ Copia `.env.example` a `.env` y ajusta, o exporta en la terminal:
 |----------|-------------|
 | `FLOWPAY_DSN` | URI PostgreSQL (`postgres://...`) |
 | `FLOWPAY_ADDR` | Dirección HTTP (por defecto `:8080`) |
-| `FLOWPAY_REMINDER_INTERVAL` | Intervalo del job de recordatorios (ej. `24h` o `1m` para pruebas) |
+| `FLOWPAY_REMINDER_TIME` | Hora diaria de los recordatorios automáticos, `HH:MM` (por defecto `10:00`) |
+| `FLOWPAY_TIMEZONE` | Zona horaria de esa hora (por defecto `America/Santiago`) |
 
 ### Correo real (SMTP)
 
@@ -78,7 +79,7 @@ La API queda en `http://127.0.0.1:8080`. Salud: `GET /health`.
 - `GET|POST /api/charges?company_id=1`
 - `GET /api/charges/:id`
 - `GET /api/charges/:id/reminders`
-- `POST /api/charges/:id/reminders` — enviar recordatorio manual (mock email/WhatsApp)
+- `POST /api/charges/:id/reminders` — enviar recordatorio manual. Cuerpo opcional `{"channels": ["whatsapp", "email"]}`; sin canales usa el preferido de la sucursal. Cada canal admite uno por hora (responde `429` con `available_at`).
 - `POST /api/charges/:id/attachment` — subir PDF/imagen
 - `GET /api/public/attachments/:token` — descarga pública de adjunto (WhatsApp)
 
@@ -92,7 +93,9 @@ Los **pagos** (portal `/pay`, Webpay, `POST /api/payments`, tokens) están en el
 
 ## Job en segundo plano
 
-Un ciclo periódico lista cobros próximos a vencer (ventana de 5 días) y vencidos sin cobrar, escribe en consola mensajes de ejemplo y registra filas en `reminders`. Los envíos de email y WhatsApp son **simulados** (solo logs) si no hay credenciales.
+Una vez al día, a la hora de `FLOWPAY_REMINDER_TIME`, un ciclo lista cobros próximos a vencer (ventana de 5 días) y vencidos sin cobrar, envía los recordatorios y registra filas en `reminders`. Los envíos de email y WhatsApp son **simulados** (solo logs) si no hay credenciales.
+
+Reiniciar o desplegar el API **no** dispara envíos. Cada día queda reservado en la tabla `job_runs`, así que el ciclo corre una sola vez aunque haya varias instancias. Si el API estaba caído a la hora programada, el ciclo del día todavía corre si vuelve dentro de las 2 horas siguientes. Para repetirlo en pruebas, borra la fila `reminders` de `job_runs` y ajusta `FLOWPAY_REMINDER_TIME`.
 
 ## Multi-empresa y escalado
 

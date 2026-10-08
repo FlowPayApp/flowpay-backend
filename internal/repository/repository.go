@@ -328,6 +328,48 @@ func (db *DB) CountRemindersByKind(ctx context.Context, chargeID int64, kind str
 	return n, err
 }
 
+// ClaimDailyJob reserva la corrida de una tarea para el día (YYYY-MM-DD).
+// Devuelve false si ese día ya la tomó otra ejecución o instancia del API.
+func (db *DB) ClaimDailyJob(ctx context.Context, name, day string) (bool, error) {
+	res, err := db.db.ExecContext(ctx, `
+INSERT INTO job_runs (name, run_on, started_at) VALUES ($1, $2::date, NOW())
+ON CONFLICT (name) DO UPDATE SET run_on = EXCLUDED.run_on, started_at = NOW()
+WHERE job_runs.run_on < EXCLUDED.run_on`, name, day)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
+// LastManualReminderByChannel último recordatorio manual enviado de un cobro, por canal.
+// Los WhatsApp que no se entregaron no cuentan.
+func (db *DB) LastManualReminderByChannel(ctx context.Context, chargeID int64) (map[string]time.Time, error) {
+	rows, err := db.db.QueryContext(ctx, `
+SELECT channel, MAX(COALESCE(sent_at, created_at))
+FROM reminders
+WHERE charge_id = $1 AND kind = 'manual' AND status = 'sent'
+  AND delivery_status NOT IN ('failed', 'undelivered')
+GROUP BY channel`, chargeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]time.Time{}
+	for rows.Next() {
+		var channel string
+		var at time.Time
+		if err := rows.Scan(&channel, &at); err != nil {
+			return nil, err
+		}
+		out[channel] = at
+	}
+	return out, rows.Err()
+}
+
 // SetChargeAttachment guarda token y extensión del archivo (sin punto).
 func (db *DB) SetChargeAttachment(ctx context.Context, companyID, chargeID int64, token, ext string) error {
 	res, err := db.db.ExecContext(ctx,

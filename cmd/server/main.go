@@ -56,6 +56,9 @@ func main() {
 	if err := repo.EnsureMailboxSchema(context.Background()); err != nil {
 		log.Printf("warn: buzones de correo: %v", err)
 	}
+	if err := repo.EnsureJobRunsSchema(context.Background()); err != nil {
+		log.Printf("warn: registro de tareas programadas: %v", err)
+	}
 	if err := os.MkdirAll(filepath.Clean(cfg.UploadDir), 0o755); err != nil {
 		log.Fatal("upload dir:", err)
 	}
@@ -96,11 +99,12 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	jobs.StartReminderJob(ctx, repo, cfg.Notify, cfg.ReminderInterval, cfg.AppPublicURL)
+	reminderSchedule := jobs.Schedule{Hour: cfg.ReminderHour, Minute: cfg.ReminderMinute, Location: cfg.ReminderLocation}
+	jobs.StartReminderJob(ctx, repo, cfg.Notify, reminderSchedule, cfg.AppPublicURL)
 
 	srv := &http.Server{Addr: cfg.Addr, Handler: r}
 	go func() {
-		printStartupStatus(db, cfg.Addr, cfg.DSN, cfg.ReminderInterval, cfg.JWTSecret, cfg.PublicBaseURL)
+		printStartupStatus(db, cfg.Addr, cfg.DSN, reminderSchedule.String(), cfg.JWTSecret, cfg.PublicBaseURL)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal(err)
 		}
@@ -114,7 +118,7 @@ func main() {
 	log.Println("servidor detenido")
 }
 
-func printStartupStatus(db *sql.DB, addr, dsn string, reminderInterval time.Duration, jwtSecret, publicBase string) {
+func printStartupStatus(db *sql.DB, addr, dsn, reminderSchedule, jwtSecret, publicBase string) {
 	const (
 		reset  = "\033[0m"
 		bold   = "\033[1m"
@@ -138,7 +142,7 @@ func printStartupStatus(db *sql.DB, addr, dsn string, reminderInterval time.Dura
 	log.Printf(cyan+"║"+reset+" %s", ok("DB destino: "+safeDSN(dsn)))
 	log.Printf(cyan+"║"+reset+" %s", ok("HTTP listening en "+addr))
 	log.Printf(cyan+"║"+reset+" %s", ok("Healthcheck: GET "+addr+"/health"))
-	log.Printf(cyan+"║"+reset+" %s", ok("Reminder job activo ("+reminderInterval.String()+")"))
+	log.Printf(cyan+"║"+reset+" %s", ok("Recordatorios automáticos: "+reminderSchedule))
 	log.Printf(cyan+"║"+reset+" %s", ok("Pagos/Webpay: flowpay-payments (repo aparte)"))
 
 	if strings.TrimSpace(jwtSecret) == "" {

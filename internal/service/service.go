@@ -19,6 +19,36 @@ import (
 type ChargeDTO struct {
 	repository.Charge
 	Status string `json:"status"`
+	// NextReminderAt solo en el detalle: canales que siguen en espera y desde cuándo se puede volver a enviar.
+	NextReminderAt map[string]time.Time `json:"next_reminder_at,omitempty"`
+}
+
+// ReminderCooldown espera mínima entre recordatorios manuales de un mismo cobro por el mismo canal.
+const ReminderCooldown = time.Hour
+
+var (
+	// ErrReminderNoChannel no se eligió ningún canal.
+	ErrReminderNoChannel = errors.New("elige al menos un canal: WhatsApp o correo")
+	// ErrReminderBadChannel canal desconocido.
+	ErrReminderBadChannel = errors.New("canal no válido; usa whatsapp o email")
+	// ErrReminderNoEmail la sucursal no tiene correo.
+	ErrReminderNoEmail = errors.New("la sucursal no tiene correo registrado")
+	// ErrReminderNoPhone la sucursal no tiene teléfono.
+	ErrReminderNoPhone = errors.New("la sucursal no tiene teléfono de WhatsApp registrado")
+)
+
+// ReminderCooldownError un canal pedido todavía está en espera.
+type ReminderCooldownError struct {
+	Channel string
+	Until   time.Time
+}
+
+func (e *ReminderCooldownError) Error() string {
+	label := "correo"
+	if e.Channel == "whatsapp" {
+		label = "WhatsApp"
+	}
+	return fmt.Sprintf("ya se envió un recordatorio por %s hace poco; podrás enviar otro a las %s", label, e.Until.Format("15:04"))
 }
 
 type DashboardResponse struct {
@@ -67,7 +97,33 @@ func (s *Service) GetCharge(ctx context.Context, companyID, id, memberUID int64)
 		return nil, err
 	}
 	dto := s.withStatus(*ch)
+	if dto.Status != "paid" {
+		next, err := s.nextReminderAt(ctx, id, time.Now())
+		if err != nil {
+			log.Printf("[FlowPay] cobro %d sin espera de recordatorios: %v", id, err)
+		}
+		dto.NextReminderAt = next
+	}
 	return &dto, nil
+}
+
+// nextReminderAt canales con un recordatorio manual reciente y la hora desde la que se puede repetir.
+func (s *Service) nextReminderAt(ctx context.Context, chargeID int64, now time.Time) (map[string]time.Time, error) {
+	last, err := s.Repo.LastManualReminderByChannel(ctx, chargeID)
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]time.Time
+	for channel, at := range last {
+		until := at.Add(ReminderCooldown)
+		if until.After(now) {
+			if out == nil {
+				out = map[string]time.Time{}
+			}
+			out[channel] = until
+		}
+	}
+	return out, nil
 }
 
 type CreateChargeInput struct {
@@ -136,26 +192,64 @@ func (s *Service) Dashboard(ctx context.Context, companyID, memberUID int64) (*D
 	}, nil
 }
 
-func (s *Service) SendReminderNow(ctx context.Context, companyID, chargeID, memberUID int64) error {
+// SendReminderNow envía un recordatorio manual por los canales pedidos ("email", "whatsapp").
+// Sin canales usa el canal preferido de la sucursal.
+func (s *Service) SendReminderNow(ctx context.Context, companyID, chargeID, memberUID int64, channels []string) error {
 	ch, err := s.Repo.GetCharge(ctx, companyID, chargeID, memberUID)
 	if err != nil {
 		return err
 	}
-	st := domain.ChargeStatus(ch.PaidAt, ch.DueDate, time.Now())
+	now := time.Now()
+	st := domain.ChargeStatus(ch.PaidAt, ch.DueDate, now)
 	if st == "paid" {
 		return errors.New("cobro ya cerrado")
 	}
 
-	channel := strings.TrimSpace(strings.ToLower(ch.ClientFollowupChannel))
-	if channel == "" {
-		channel = "all"
+	var sendEmail, sendWhatsApp bool
+	if len(channels) == 0 {
+		channel := strings.TrimSpace(strings.ToLower(ch.ClientFollowupChannel))
+		if channel == "" {
+			channel = "all"
+		}
+		if channel == "none" {
+			return errors.New("cliente con seguimiento desactivado (none)")
+		}
+		sendEmail = channel == "all" || channel == "email"
+		sendWhatsApp = channel == "all" || channel == "whatsapp"
+	} else {
+		for _, c := range channels {
+			switch strings.TrimSpace(strings.ToLower(c)) {
+			case "email":
+				sendEmail = true
+			case "whatsapp":
+				sendWhatsApp = true
+			default:
+				return ErrReminderBadChannel
+			}
+		}
 	}
-	if channel == "none" {
-		return errors.New("cliente con seguimiento desactivado (none)")
+	if !sendEmail && !sendWhatsApp {
+		return ErrReminderNoChannel
+	}
+	if sendEmail && (ch.ClientEmail == nil || strings.TrimSpace(*ch.ClientEmail) == "") {
+		return ErrReminderNoEmail
+	}
+	if sendWhatsApp && (ch.ClientPhone == nil || strings.TrimSpace(*ch.ClientPhone) == "") {
+		return ErrReminderNoPhone
+	}
+
+	waiting, err := s.nextReminderAt(ctx, chargeID, now)
+	if err != nil {
+		return err
+	}
+	if until, ok := waiting["whatsapp"]; ok && sendWhatsApp {
+		return &ReminderCooldownError{Channel: "whatsapp", Until: until}
+	}
+	if until, ok := waiting["email"]; ok && sendEmail {
+		return &ReminderCooldownError{Channel: "email", Until: until}
 	}
 
 	priorOverdue, _ := s.Repo.CountRemindersByKind(ctx, chargeID, "overdue")
-	now := time.Now()
 	phase, daysU := remindercontent.PhaseFromCharge(*ch, now, priorOverdue)
 	subj, textBody, _, payURL, resErr := remindercontent.ResolveReminder(ctx, s.Repo, companyID, phase, daysU, priorOverdue, *ch, s.AppPublicURL)
 	if resErr != nil {
@@ -163,9 +257,6 @@ func (s *Service) SendReminderNow(ctx context.Context, companyID, chargeID, memb
 	}
 	whatsAppMessage, _ := notify.BuildWhatsAppTemplate(phase, *ch, payURL, notify.TemplateSIDs{})
 	emailMessage := fmt.Sprintf("Asunto: %s\n\n%s", subj, textBody)
-
-	sendEmail := channel == "all" || channel == "email"
-	sendWhatsApp := channel == "all" || channel == "whatsapp"
 
 	if sendEmail && s.Notify != nil {
 		if err := s.Notify.SendReminderEmailFrom(*ch, subj, textBody, s.CompanySMTP(ctx, companyID)); err != nil {

@@ -54,6 +54,16 @@ func (db *DB) EnsureDeliverySchema(ctx context.Context) error {
 	return nil
 }
 
+// EnsureJobRunsSchema registra el último día en que corrió cada tarea programada.
+func (db *DB) EnsureJobRunsSchema(ctx context.Context) error {
+	_, err := db.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS job_runs (
+		name TEXT PRIMARY KEY,
+		run_on DATE NOT NULL,
+		started_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	)`)
+	return err
+}
+
 // EnsureMailboxSchema guarda el buzón SMTP con el que cada empresa envía recordatorios.
 func (db *DB) EnsureMailboxSchema(ctx context.Context) error {
 	stmts := []string{

@@ -14,35 +14,82 @@ import (
 	"github.com/flowpay/flowpay-backend/internal/repository"
 )
 
-// StartReminderJob ejecuta un ciclo por intervalo para **todas** las empresas en `companies`.
-func StartReminderJob(ctx context.Context, repo *repository.DB, d *notify.Dispatcher, interval time.Duration, appPublicURL string) {
-	ticker := time.NewTicker(interval)
+// Schedule hora del día a la que corre el ciclo de recordatorios automáticos.
+type Schedule struct {
+	Hour     int
+	Minute   int
+	Location *time.Location
+}
+
+func (s Schedule) String() string {
+	return fmt.Sprintf("todos los días a las %02d:%02d (%s)", s.Hour, s.Minute, s.Location)
+}
+
+const (
+	reminderJobName = "reminders"
+	// catchUpWindow si el API estaba caído a la hora programada, el ciclo del día aún corre dentro de este margen.
+	catchUpWindow = 2 * time.Hour
+)
+
+// StartReminderJob corre una vez al día, a la hora de sched, para **todas** las empresas en `companies`.
+// Arrancar o desplegar el API no dispara envíos: el día queda reservado en job_runs y
+// solo una ejecución (aunque haya varias instancias) lo procesa.
+func StartReminderJob(ctx context.Context, repo *repository.DB, d *notify.Dispatcher, sched Schedule, appPublicURL string) {
 	go func() {
-		run := func() {
-			ids, err := repo.ListCompanyIDs(context.Background())
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		var settled string
+		check := func() {
+			now := time.Now().In(sched.Location)
+			day := now.Format("2006-01-02")
+			if day == settled {
+				return
+			}
+			slot := time.Date(now.Year(), now.Month(), now.Day(), sched.Hour, sched.Minute, 0, 0, sched.Location)
+			if now.Before(slot) {
+				return
+			}
+			if now.Sub(slot) > catchUpWindow {
+				settled = day
+				return
+			}
+			claimed, err := repo.ClaimDailyJob(context.Background(), reminderJobName, day)
 			if err != nil {
-				log.Println("[FlowPay Job] error listando empresas:", err)
+				log.Println("[FlowPay Job] no se pudo reservar el ciclo del día:", err)
 				return
 			}
-			if len(ids) == 0 {
-				log.Println("[FlowPay Job] sin empresas en BD; nada que procesar")
+			settled = day
+			if !claimed {
+				log.Printf("[FlowPay Job] los recordatorios de %s ya se procesaron", day)
 				return
 			}
-			for _, cid := range ids {
-				runOnce(context.Background(), repo, d, cid, appPublicURL)
-			}
+			runAllCompanies(repo, d, appPublicURL)
 		}
-		run()
+		check()
 		for {
 			select {
 			case <-ctx.Done():
-				ticker.Stop()
 				return
 			case <-ticker.C:
-				run()
+				check()
 			}
 		}
 	}()
+}
+
+func runAllCompanies(repo *repository.DB, d *notify.Dispatcher, appPublicURL string) {
+	ids, err := repo.ListCompanyIDs(context.Background())
+	if err != nil {
+		log.Println("[FlowPay Job] error listando empresas:", err)
+		return
+	}
+	if len(ids) == 0 {
+		log.Println("[FlowPay Job] sin empresas en BD; nada que procesar")
+		return
+	}
+	for _, cid := range ids {
+		runOnce(context.Background(), repo, d, cid, appPublicURL)
+	}
 }
 
 func runOnce(ctx context.Context, repo *repository.DB, d *notify.Dispatcher, companyID int64, appPublicURL string) {
