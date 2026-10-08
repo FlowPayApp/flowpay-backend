@@ -19,6 +19,9 @@ import (
 type TwilioWebhookDeps struct {
 	AuthToken               string
 	ValidateTwilioSignature bool
+	// Bases públicas (p. ej. https://www.geldflus.com): Twilio firma la URL configurada en la consola,
+	// que detrás de proxies no siempre coincide con la que reconstruyen los encabezados.
+	PublicBaseURLs []string
 }
 
 func (d *Deps) ListPlatformWhatsAppNumbers(c *gin.Context) {
@@ -93,14 +96,21 @@ func (d *Deps) TwilioWhatsAppWebhook(c *gin.Context) {
 
 	if d.TwilioWebhook.ValidateTwilioSignature && strings.TrimSpace(d.TwilioWebhook.AuthToken) != "" {
 		sig := c.GetHeader("X-Twilio-Signature")
-		fullURL := twilioWebhookFullURL(c)
-		ok := twiliovalidate.RequestValidator{AuthToken: d.TwilioWebhook.AuthToken}.Validate(sig, fullURL, form)
-		if !ok {
-			log.Printf("[FlowPay WhatsApp] webhook firma inválida url=%s", fullURL)
+		validator := twiliovalidate.RequestValidator{AuthToken: d.TwilioWebhook.AuthToken}
+		candidates := twilioWebhookURLs(c, d.TwilioWebhook.PublicBaseURLs)
+		signedURL := ""
+		for _, u := range candidates {
+			if validator.Validate(sig, u, form) {
+				signedURL = u
+				break
+			}
+		}
+		if signedURL == "" {
+			log.Printf("[FlowPay WhatsApp] webhook firma inválida (probadas: %s)", strings.Join(candidates, ", "))
 			c.Status(http.StatusForbidden)
 			return
 		}
-		log.Printf("[FlowPay WhatsApp] webhook firma OK url=%s", fullURL)
+		log.Printf("[FlowPay WhatsApp] webhook firma OK url=%s", signedURL)
 	} else {
 		log.Printf("[FlowPay WhatsApp] webhook sin validación de firma (FLOWPAY_TWILIO_VALIDATE_WEBHOOK desactivado o sin token)")
 	}
@@ -225,4 +235,31 @@ func twilioWebhookFullURL(c *gin.Context) string {
 		host = strings.TrimSpace(parts[0])
 	}
 	return scheme + "://" + host + c.Request.URL.Path
+}
+
+// twilioWebhookURLs URLs con las que Twilio pudo haber firmado la petición, sin repetir.
+func twilioWebhookURLs(c *gin.Context, publicBases []string) []string {
+	suffix := c.Request.URL.Path
+	if q := c.Request.URL.RawQuery; q != "" {
+		suffix += "?" + q
+	}
+	out := []string{}
+	seen := map[string]bool{}
+	add := func(u string) {
+		if u != "" && !seen[u] {
+			seen[u] = true
+			out = append(out, u)
+		}
+	}
+	for _, base := range publicBases {
+		if base = strings.TrimRight(strings.TrimSpace(base), "/"); base != "" {
+			add(base + suffix)
+		}
+	}
+	forwarded := twilioWebhookFullURL(c)
+	if q := c.Request.URL.RawQuery; q != "" {
+		forwarded += "?" + q
+	}
+	add(forwarded)
+	return out
 }

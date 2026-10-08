@@ -69,6 +69,7 @@ func main() {
 		TwilioWebhook: controller.TwilioWebhookDeps{
 			AuthToken:               cfg.TwilioAuthToken,
 			ValidateTwilioSignature: cfg.TwilioValidateWebhook,
+			PublicBaseURLs:          []string{cfg.PublicBaseURL, cfg.AppPublicURL},
 		},
 		DefaultCompany: cfg.DefaultCompanyID,
 		JWTSecret:      cfg.JWTSecret,
