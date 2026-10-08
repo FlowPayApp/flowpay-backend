@@ -54,6 +54,26 @@ func (db *DB) EnsureDeliverySchema(ctx context.Context) error {
 	return nil
 }
 
+// EnsureReminderPolicySchema frecuencia de recordatorios automáticos: por empresa y, si se quiere, por cobro.
+func (db *DB) EnsureReminderPolicySchema(ctx context.Context) error {
+	stmts := []string{
+		`ALTER TABLE companies ADD COLUMN IF NOT EXISTS reminder_days_before TEXT NOT NULL DEFAULT '3,1,0'`,
+		`ALTER TABLE companies ADD COLUMN IF NOT EXISTS reminder_overdue_every INT NOT NULL DEFAULT 3`,
+		`ALTER TABLE companies ADD COLUMN IF NOT EXISTS reminder_overdue_max INT NOT NULL DEFAULT 5`,
+		`ALTER TABLE charges ADD COLUMN IF NOT EXISTS reminder_mode TEXT NOT NULL DEFAULT 'company'`,
+		`ALTER TABLE charges ADD COLUMN IF NOT EXISTS reminder_channel TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE charges ADD COLUMN IF NOT EXISTS reminder_days_before TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE charges ADD COLUMN IF NOT EXISTS reminder_overdue_every INT NOT NULL DEFAULT 0`,
+		`ALTER TABLE charges ADD COLUMN IF NOT EXISTS reminder_overdue_max INT NOT NULL DEFAULT 0`,
+	}
+	for _, q := range stmts {
+		if _, err := db.db.ExecContext(ctx, q); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // EnsureJobRunsSchema registra el último día en que corrió cada tarea programada.
 func (db *DB) EnsureJobRunsSchema(ctx context.Context) error {
 	_, err := db.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS job_runs (

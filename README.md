@@ -93,7 +93,9 @@ Los **pagos** (portal `/pay`, Webpay, `POST /api/payments`, tokens) están en el
 
 ## Job en segundo plano
 
-Una vez al día, a la hora de `FLOWPAY_REMINDER_TIME`, un ciclo lista cobros próximos a vencer (ventana de 5 días) y vencidos sin cobrar, envía los recordatorios y registra filas en `reminders`. Los envíos de email y WhatsApp son **simulados** (solo logs) si no hay credenciales.
+Una vez al día, a la hora de `FLOWPAY_REMINDER_TIME`, un ciclo revisa los cobros sin pagar, envía los recordatorios que tocan ese día y registra filas en `reminders`.
+
+Qué días tocan lo define la frecuencia: cada empresa tiene una (por defecto 3 días antes, 1 día antes y el día que vence; vencido, cada 3 días hasta 5 avisos) y cada cobro puede usar esa, una propia o ninguna (`reminder_mode`: `company`, `custom`, `off`). El cobro también puede fijar su canal (`reminder_channel`); vacío usa el de la sucursal. Los envíos de email y WhatsApp son **simulados** (solo logs) si no hay credenciales.
 
 Reiniciar o desplegar el API **no** dispara envíos. Cada día queda reservado en la tabla `job_runs`, así que el ciclo corre una sola vez aunque haya varias instancias. Si el API estaba caído a la hora programada, el ciclo del día todavía corre si vuelve dentro de las 2 horas siguientes. Para repetirlo en pruebas, borra la fila `reminders` de `job_runs` y ajusta `FLOWPAY_REMINDER_TIME`.
 

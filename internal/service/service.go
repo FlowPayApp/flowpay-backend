@@ -21,6 +21,12 @@ type ChargeDTO struct {
 	Status string `json:"status"`
 	// NextReminderAt solo en el detalle: canales que siguen en espera y desde cuándo se puede volver a enviar.
 	NextReminderAt map[string]time.Time `json:"next_reminder_at,omitempty"`
+	// Solo en el detalle: recordatorios automáticos. ReminderPolicy es la que rige (la propia o la de la empresa).
+	ReminderMode    string                 `json:"reminder_mode,omitempty"`
+	ReminderChannel string                 `json:"reminder_channel,omitempty"`
+	ReminderPolicy  *domain.ReminderPolicy `json:"reminder_policy,omitempty"`
+	// CompanyReminderPolicy la de la empresa, para volver a ella desde una personalizada.
+	CompanyReminderPolicy *domain.ReminderPolicy `json:"company_reminder_policy,omitempty"`
 }
 
 // ReminderCooldown espera mínima entre recordatorios manuales de un mismo cobro por el mismo canal.
@@ -72,6 +78,8 @@ type Service struct {
 	Notify       *notify.Dispatcher
 	UploadDir    string
 	AppPublicURL string
+	// ReminderSendTime hora diaria (HH:MM) del ciclo de recordatorios automáticos, para mostrarla en el panel.
+	ReminderSendTime string
 }
 
 func (s *Service) withStatus(ch repository.Charge) ChargeDTO {
@@ -104,6 +112,9 @@ func (s *Service) GetCharge(ctx context.Context, companyID, id, memberUID int64)
 		}
 		dto.NextReminderAt = next
 	}
+	if err := s.withReminders(ctx, &dto); err != nil {
+		log.Printf("[FlowPay] cobro %d sin configuración de recordatorios: %v", id, err)
+	}
 	return &dto, nil
 }
 
@@ -130,11 +141,16 @@ type CreateChargeInput struct {
 	ClientID int64   `json:"client_id"`
 	Amount   float64 `json:"amount"`
 	DueDate  string  `json:"due_date"`
+	ChargeRemindersInput
 }
 
 func (s *Service) CreateCharge(ctx context.Context, companyID, memberUID int64, in CreateChargeInput) (int64, error) {
 	if in.ClientID == 0 || in.Amount <= 0 || in.DueDate == "" {
 		return 0, errors.New("payload de cobro inválido")
+	}
+	reminders, err := s.mergeChargeReminders(ctx, companyID, repository.ChargeReminderSettings{Mode: domain.ReminderModeCompany}, in.ChargeRemindersInput)
+	if err != nil {
+		return 0, err
 	}
 	due, err := time.ParseInLocation("2006-01-02", in.DueDate, time.Local)
 	if err != nil {
@@ -150,6 +166,11 @@ func (s *Service) CreateCharge(ctx context.Context, companyID, memberUID int64, 
 	id, err := s.Repo.CreateCharge(ctx, companyID, in.ClientID, in.Amount, due)
 	if err != nil {
 		return 0, err
+	}
+	if in.ChargeRemindersInput.any() {
+		if err := s.Repo.UpdateChargeReminderSettings(ctx, companyID, id, reminders); err != nil {
+			return 0, err
+		}
 	}
 	if _, err := s.Repo.EnsureClientPaymentToken(ctx, companyID, in.ClientID); err != nil {
 		log.Printf("[FlowPay] no se pudo asignar el enlace de pago a la sucursal: %v", err)
@@ -208,6 +229,9 @@ func (s *Service) SendReminderNow(ctx context.Context, companyID, chargeID, memb
 	var sendEmail, sendWhatsApp bool
 	if len(channels) == 0 {
 		channel := strings.TrimSpace(strings.ToLower(ch.ClientFollowupChannel))
+		if set, err := s.Repo.GetChargeReminderSettings(ctx, chargeID); err == nil && set.Channel != "" {
+			channel = set.Channel
+		}
 		if channel == "" {
 			channel = "all"
 		}
@@ -305,6 +329,9 @@ type MessagingSettingsResponse struct {
 	TransferInstructions string                           `json:"transfer_instructions"`
 	PaymentURLTemplate   string                           `json:"payment_url_template"`
 	Templates            []repository.ReminderTemplateRow `json:"templates"`
+	ReminderPolicy       domain.ReminderPolicy            `json:"reminder_policy"`
+	// SendTime hora diaria (HH:MM, hora de Chile por defecto) del ciclo de recordatorios automáticos.
+	SendTime string `json:"send_time"`
 }
 
 // MessagingTemplateInput fila de plantilla desde el panel.
@@ -323,6 +350,8 @@ type SaveMessagingInput struct {
 	TransferInstructions string                   `json:"transfer_instructions"`
 	PaymentURLTemplate   string                   `json:"payment_url_template"`
 	Templates            []MessagingTemplateInput `json:"templates"`
+	// ReminderPolicy nula deja la frecuencia como está.
+	ReminderPolicy *domain.ReminderPolicy `json:"reminder_policy"`
 }
 
 func (s *Service) GetCompanyMessagingSettings(ctx context.Context, companyID int64) (*MessagingSettingsResponse, error) {
@@ -334,10 +363,16 @@ func (s *Service) GetCompanyMessagingSettings(ctx context.Context, companyID int
 	if err != nil {
 		tpl = nil
 	}
+	policy, err := s.Repo.GetCompanyReminderPolicy(ctx, companyID)
+	if err != nil {
+		return nil, err
+	}
 	return &MessagingSettingsResponse{
 		TransferInstructions: cm.TransferInstructions,
 		PaymentURLTemplate:   cm.PaymentURLTemplate,
 		Templates:            tpl,
+		ReminderPolicy:       policy,
+		SendTime:             s.ReminderSendTime,
 	}, nil
 }
 
@@ -360,8 +395,21 @@ func (s *Service) SaveCompanyMessagingSettings(ctx context.Context, companyID in
 			return errors.New("En plantillas approaching, day_min no puede ser mayor que day_max")
 		}
 	}
+	var policy domain.ReminderPolicy
+	if in.ReminderPolicy != nil {
+		p, err := in.ReminderPolicy.Normalized()
+		if err != nil {
+			return err
+		}
+		policy = p
+	}
 	if err := s.Repo.UpdateCompanyMessaging(ctx, companyID, in.TransferInstructions, in.PaymentURLTemplate); err != nil {
 		return err
+	}
+	if in.ReminderPolicy != nil {
+		if err := s.Repo.UpdateCompanyReminderPolicy(ctx, companyID, policy); err != nil {
+			return err
+		}
 	}
 	rows := make([]repository.ReminderTemplateRow, 0, len(in.Templates))
 	for _, t := range in.Templates {
@@ -553,10 +601,11 @@ type PatchChargeInput struct {
 	DueDate  *string  `json:"due_date"`
 	Amount   *float64 `json:"amount"`
 	SetPaid  *bool    `json:"set_paid"`
+	ChargeRemindersInput
 }
 
 func (s *Service) PatchCharge(ctx context.Context, companyID, chargeID, memberUID int64, in PatchChargeInput) error {
-	has := in.ClientID != nil || in.DueDate != nil || in.Amount != nil || in.SetPaid != nil
+	has := in.ClientID != nil || in.DueDate != nil || in.Amount != nil || in.SetPaid != nil || in.ChargeRemindersInput.any()
 	if !has {
 		return errors.New("nada que actualizar")
 	}
@@ -584,8 +633,26 @@ func (s *Service) PatchCharge(ctx context.Context, companyID, chargeID, memberUI
 		duePtr = &t
 	}
 
+	var reminders *repository.ChargeReminderSettings
+	if in.ChargeRemindersInput.any() {
+		cur, err := s.Repo.GetChargeReminderSettings(ctx, chargeID)
+		if err != nil {
+			return err
+		}
+		next, err := s.mergeChargeReminders(ctx, companyID, cur, in.ChargeRemindersInput)
+		if err != nil {
+			return err
+		}
+		reminders = &next
+	}
+
 	if err := s.Repo.UpdateChargeFields(ctx, companyID, chargeID, in.ClientID, duePtr, in.Amount); err != nil {
 		return err
+	}
+	if reminders != nil {
+		if err := s.Repo.UpdateChargeReminderSettings(ctx, companyID, chargeID, *reminders); err != nil {
+			return err
+		}
 	}
 
 	if in.SetPaid == nil {

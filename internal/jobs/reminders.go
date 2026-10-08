@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flowpay/flowpay-backend/internal/domain"
 	"github.com/flowpay/flowpay-backend/internal/notify"
 	"github.com/flowpay/flowpay-backend/internal/remindercontent"
 	"github.com/flowpay/flowpay-backend/internal/repository"
@@ -21,8 +22,13 @@ type Schedule struct {
 	Location *time.Location
 }
 
+// Clock la hora como HH:MM.
+func (s Schedule) Clock() string {
+	return fmt.Sprintf("%02d:%02d", s.Hour, s.Minute)
+}
+
 func (s Schedule) String() string {
-	return fmt.Sprintf("todos los días a las %02d:%02d (%s)", s.Hour, s.Minute, s.Location)
+	return fmt.Sprintf("todos los días a las %s (%s)", s.Clock(), s.Location)
 }
 
 const (
@@ -63,7 +69,7 @@ func StartReminderJob(ctx context.Context, repo *repository.DB, d *notify.Dispat
 				log.Printf("[FlowPay Job] los recordatorios de %s ya se procesaron", day)
 				return
 			}
-			runAllCompanies(repo, d, appPublicURL)
+			runAllCompanies(repo, d, appPublicURL, truncate(now))
 		}
 		check()
 		for {
@@ -77,7 +83,7 @@ func StartReminderJob(ctx context.Context, repo *repository.DB, d *notify.Dispat
 	}()
 }
 
-func runAllCompanies(repo *repository.DB, d *notify.Dispatcher, appPublicURL string) {
+func runAllCompanies(repo *repository.DB, d *notify.Dispatcher, appPublicURL string, today time.Time) {
 	ids, err := repo.ListCompanyIDs(context.Background())
 	if err != nil {
 		log.Println("[FlowPay Job] error listando empresas:", err)
@@ -88,13 +94,23 @@ func runAllCompanies(repo *repository.DB, d *notify.Dispatcher, appPublicURL str
 		return
 	}
 	for _, cid := range ids {
-		runOnce(context.Background(), repo, d, cid, appPublicURL)
+		runOnce(context.Background(), repo, d, cid, appPublicURL, today)
 	}
 }
 
-func runOnce(ctx context.Context, repo *repository.DB, d *notify.Dispatcher, companyID int64, appPublicURL string) {
+// sender lo que comparten los envíos de una empresa en un ciclo.
+type sender struct {
+	repo         *repository.DB
+	d            *notify.Dispatcher
+	mailbox      *notify.SMTPConfig
+	waFrom       string
+	appPublicURL string
+}
+
+// runOnce avisa a cada cobro sin pagar según su frecuencia (la propia o la de la empresa).
+// today es la fecha del ciclo, a medianoche en la zona del horario.
+func runOnce(ctx context.Context, repo *repository.DB, d *notify.Dispatcher, companyID int64, appPublicURL string, today time.Time) {
 	log.Printf("[FlowPay Job] Inicio de ciclo de recordatorios (company_id=%d)…", companyID)
-	mailbox := companyMailbox(ctx, repo, companyID)
 	waFrom, waErr := repo.FirstActiveWhatsAppToForCompany(ctx, companyID)
 	if waErr != nil && !errors.Is(waErr, sql.ErrNoRows) {
 		log.Println("[FlowPay Job] número WhatsApp:", waErr)
@@ -102,92 +118,98 @@ func runOnce(ctx context.Context, repo *repository.DB, d *notify.Dispatcher, com
 	if waErr != nil {
 		waFrom = ""
 	}
-	dueSoon, err := repo.ChargesDueSoon(ctx, companyID, 5, 0)
+	s := sender{repo: repo, d: d, mailbox: companyMailbox(ctx, repo, companyID), waFrom: waFrom, appPublicURL: appPublicURL}
+
+	companyPolicy, err := repo.GetCompanyReminderPolicy(ctx, companyID)
 	if err != nil {
-		log.Println("[FlowPay Job] error due_soon:", err)
+		log.Println("[FlowPay Job] frecuencia de la empresa:", err)
+		companyPolicy = domain.DefaultReminderPolicy()
+	}
+	charges, err := repo.ChargesForAutoReminders(ctx, companyID)
+	if err != nil {
+		log.Println("[FlowPay Job] error listando cobros:", err)
 		return
 	}
-	tn := truncate(time.Now())
-	for _, ch := range dueSoon {
-		if !allowAutoFollowUp(ch.ClientFollowupChannel) {
+	for _, item := range charges {
+		ch := item.Charge
+		channel := item.Reminders.Channel
+		if channel == "" {
+			channel = ch.ClientFollowupChannel
+		}
+		if !allowAutoFollowUp(channel) {
 			continue
 		}
-		td := truncate(ch.DueDate)
-		var phase string
-		var daysUntil int
-		switch {
-		case tn.Before(td):
-			phase = remindercontent.PhaseApproaching
-			daysUntil = remindercontent.CalendarDaysUntilDue(tn, td)
-		case tn.Equal(td):
-			phase = remindercontent.PhaseDueToday
-			daysUntil = 0
-		default:
-			continue
+		policy := companyPolicy
+		if item.Reminders.Mode == domain.ReminderModeCustom {
+			policy = item.Reminders.Policy
 		}
-		subject, body, _, payURL, err := remindercontent.ResolveReminder(ctx, repo, ch.CompanyID, phase, daysUntil, 0, ch, appPublicURL)
-		if err != nil {
-			log.Println("[FlowPay Job] resolve template due_soon:", err)
-			subject, body = dueSoonTemplate(ch, tn, td)
-		}
-		log.Println("[FlowPay Job]", subject)
-		if ok, _ := shouldPersist(ctx, repo, ch.ID, "due_soon"); ok {
-			if shouldSendEmail(ch.ClientFollowupChannel) {
-				if sendCompanyEmail(d, ch, subject, body, mailbox) {
-					emailMessage := fmt.Sprintf("Asunto: %s\n\n%s", subject, body)
-					if _, err := repo.InsertReminder(ctx, ch.ID, "due_soon", "email", "sent", emailMessage, ptrNow()); err != nil {
-						log.Println("[FlowPay Job] insert reminder:", err)
-					}
-				}
+		due := time.Date(ch.DueDate.Year(), ch.DueDate.Month(), ch.DueDate.Day(), 0, 0, 0, 0, today.Location())
+
+		if !today.After(due) {
+			daysUntil := remindercontent.CalendarDaysUntilDue(today, due)
+			if !policy.SendsBefore(daysUntil) {
+				continue
 			}
-			if shouldSendWhatsApp(ch.ClientFollowupChannel) {
-				if preview, sent, ok := sendCompanyWhatsAppTemplate(d, ch, waFrom, phase, payURL); ok {
-					saveWhatsAppReminder(ctx, repo, ch.ID, "due_soon", preview, sent)
-				}
+			if ok, _ := shouldPersist(ctx, repo, ch.ID, "due_soon"); !ok {
+				continue
 			}
-		}
-	}
-	overdue, err := repo.ChargesOverdueUnpaid(ctx, companyID, 0)
-	if err != nil {
-		log.Println("[FlowPay Job] error overdue:", err)
-		return
-	}
-	for _, ch := range overdue {
-		if !allowAutoFollowUp(ch.ClientFollowupChannel) {
+			phase := remindercontent.PhaseApproaching
+			if daysUntil == 0 {
+				phase = remindercontent.PhaseDueToday
+			}
+			subject, body, _, payURL, err := remindercontent.ResolveReminder(ctx, repo, ch.CompanyID, phase, daysUntil, 0, ch, appPublicURL)
+			if err != nil {
+				log.Println("[FlowPay Job] resolve template due_soon:", err)
+				subject, body = dueSoonTemplate(ch, today, due)
+			}
+			s.send(ctx, ch, channel, "due_soon", phase, subject, body, payURL)
 			continue
 		}
-		priorOverdue, err := repo.CountRemindersByKind(ctx, ch.ID, "overdue")
+
+		if policy.OverdueMax == 0 {
+			continue
+		}
+		sends, last, err := repo.OverdueReminderHistory(ctx, ch.ID)
 		if err != nil {
-			log.Println("[FlowPay Job] count overdue reminders:", err)
-			priorOverdue = 0
+			log.Println("[FlowPay Job] historial de avisos de mora:", err)
+			continue
+		}
+		if policy.OverdueMax != domain.OverdueUnlimited && sends >= policy.OverdueMax {
+			continue
+		}
+		if last != nil && calendarDays(truncate(last.In(today.Location())), today) < policy.OverdueEvery {
+			continue
 		}
 		phase := remindercontent.PhaseOverdueFollowUp
-		if priorOverdue == 0 {
+		if sends == 0 {
 			phase = remindercontent.PhaseOverdueFirst
 		}
-		subject, body, _, payURL, err := remindercontent.ResolveReminder(ctx, repo, ch.CompanyID, phase, 0, priorOverdue, ch, appPublicURL)
+		subject, body, _, payURL, err := remindercontent.ResolveReminder(ctx, repo, ch.CompanyID, phase, 0, sends, ch, appPublicURL)
 		if err != nil {
 			log.Println("[FlowPay Job] resolve template overdue:", err)
-			subject, body = overdueTemplate(ch, priorOverdue)
+			subject, body = overdueTemplate(ch, sends)
 		}
-		log.Println("[FlowPay Job]", subject)
-		if ok, _ := shouldPersist(ctx, repo, ch.ID, "overdue"); ok {
-			if shouldSendEmail(ch.ClientFollowupChannel) {
-				if sendCompanyEmail(d, ch, subject, body, mailbox) {
-					emailMessage := fmt.Sprintf("Asunto: %s\n\n%s", subject, body)
-					if _, err := repo.InsertReminder(ctx, ch.ID, "overdue", "email", "sent", emailMessage, ptrNow()); err != nil {
-						log.Println("[FlowPay Job] insert reminder:", err)
-					}
-				}
-			}
-			if shouldSendWhatsApp(ch.ClientFollowupChannel) {
-				if preview, sent, ok := sendCompanyWhatsAppTemplate(d, ch, waFrom, phase, payURL); ok {
-					saveWhatsAppReminder(ctx, repo, ch.ID, "overdue", preview, sent)
-				}
+		s.send(ctx, ch, channel, "overdue", phase, subject, body, payURL)
+	}
+	log.Printf("[FlowPay Job] Ciclo completado (company_id=%d).", companyID)
+}
+
+// send envía por los canales de channel y registra cada envío logrado.
+func (s sender) send(ctx context.Context, ch repository.Charge, channel, kind, phase, subject, body, payURL string) {
+	log.Println("[FlowPay Job]", subject)
+	if shouldSendEmail(channel) {
+		if sendCompanyEmail(s.d, ch, subject, body, s.mailbox) {
+			emailMessage := fmt.Sprintf("Asunto: %s\n\n%s", subject, body)
+			if _, err := s.repo.InsertReminder(ctx, ch.ID, kind, "email", "sent", emailMessage, ptrNow()); err != nil {
+				log.Println("[FlowPay Job] insert reminder:", err)
 			}
 		}
 	}
-	log.Printf("[FlowPay Job] Ciclo completado (company_id=%d).", companyID)
+	if shouldSendWhatsApp(channel) {
+		if preview, sent, ok := sendCompanyWhatsAppTemplate(s.d, ch, s.waFrom, phase, payURL); ok {
+			saveWhatsAppReminder(ctx, s.repo, ch.ID, kind, preview, sent)
+		}
+	}
 }
 
 func truncate(t time.Time) time.Time {
@@ -195,17 +217,14 @@ func truncate(t time.Time) time.Time {
 	return time.Date(y, m, d, 0, 0, 0, 0, t.Location())
 }
 
+// calendarDays días de calendario entre dos fechas a medianoche en la misma zona.
+func calendarDays(from, to time.Time) int {
+	return int(to.Sub(from).Round(24*time.Hour) / (24 * time.Hour))
+}
+
 func ptrNow() *time.Time {
 	t := time.Now()
 	return &t
-}
-
-func daysBetween(a, b time.Time) int {
-	d := int(b.Sub(a).Hours() / 24)
-	if d < 0 {
-		return 0
-	}
-	return d
 }
 
 func dueSoonTemplate(ch repository.Charge, today, dueDate time.Time) (subject string, body string) {

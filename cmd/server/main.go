@@ -59,14 +59,19 @@ func main() {
 	if err := repo.EnsureJobRunsSchema(context.Background()); err != nil {
 		log.Printf("warn: registro de tareas programadas: %v", err)
 	}
+	if err := repo.EnsureReminderPolicySchema(context.Background()); err != nil {
+		log.Printf("warn: frecuencia de recordatorios: %v", err)
+	}
 	if err := os.MkdirAll(filepath.Clean(cfg.UploadDir), 0o755); err != nil {
 		log.Fatal("upload dir:", err)
 	}
+	reminderSchedule := jobs.Schedule{Hour: cfg.ReminderHour, Minute: cfg.ReminderMinute, Location: cfg.ReminderLocation}
 	svc := &service.Service{
-		Repo:         repo,
-		Notify:       cfg.Notify,
-		UploadDir:    cfg.UploadDir,
-		AppPublicURL: cfg.AppPublicURL,
+		Repo:             repo,
+		Notify:           cfg.Notify,
+		UploadDir:        cfg.UploadDir,
+		AppPublicURL:     cfg.AppPublicURL,
+		ReminderSendTime: reminderSchedule.Clock(),
 	}
 	wa := &service.WhatsAppService{Repo: repo, AccountSID: cfg.TwilioAccountSID, AuthToken: cfg.TwilioAuthToken}
 	deps := controller.Deps{
@@ -99,7 +104,6 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	reminderSchedule := jobs.Schedule{Hour: cfg.ReminderHour, Minute: cfg.ReminderMinute, Location: cfg.ReminderLocation}
 	jobs.StartReminderJob(ctx, repo, cfg.Notify, reminderSchedule, cfg.AppPublicURL)
 
 	srv := &http.Server{Addr: cfg.Addr, Handler: r}
