@@ -322,12 +322,38 @@ var (
 	ErrWhatsAppReplyLong = errors.New("el mensaje puede tener hasta 1000 caracteres")
 )
 
-// ReplyChargeWhatsApp envía un texto libre al cliente si escribió en las últimas 24 horas.
-func (s *Service) ReplyChargeWhatsApp(ctx context.Context, companyID, chargeID, memberUID int64, text string) (*model.Message, error) {
+// prepareWhatsAppReply valida que se pueda escribirle al cliente del cobro y resuelve el número que envía.
+// WhatsApp solo permite mensajes libres durante las 24 horas siguientes al último mensaje del cliente.
+func (s *Service) prepareWhatsAppReply(ctx context.Context, companyID, chargeID, memberUID int64) (*repository.Charge, string, error) {
 	ch, err := s.Repo.GetCharge(ctx, companyID, chargeID, memberUID)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
+	if ch.ClientPhone == nil || strings.TrimSpace(*ch.ClientPhone) == "" {
+		return nil, "", ErrWhatsAppReplyPhone
+	}
+	if s.Notify == nil {
+		return nil, "", errors.New("WhatsApp no está configurado")
+	}
+	since := time.Now().Add(-24 * time.Hour)
+	open, err := s.Repo.HasInboundFromPhoneSince(ctx, companyID, *ch.ClientPhone, since)
+	if err != nil {
+		return nil, "", err
+	}
+	if !open {
+		return nil, "", ErrWhatsAppReplyWindow
+	}
+	from := ""
+	if tn, ferr := s.Repo.FirstActiveWhatsAppToForCompany(ctx, companyID); ferr == nil {
+		from = strings.TrimSpace(tn)
+	} else if !errors.Is(ferr, sql.ErrNoRows) {
+		return nil, "", ferr
+	}
+	return ch, from, nil
+}
+
+// ReplyChargeWhatsApp envía un texto libre al cliente si escribió en las últimas 24 horas.
+func (s *Service) ReplyChargeWhatsApp(ctx context.Context, companyID, chargeID, memberUID int64, text string) (*model.Message, error) {
 	msg := strings.TrimSpace(text)
 	if msg == "" {
 		return nil, ErrWhatsAppReplyEmpty
@@ -335,30 +361,18 @@ func (s *Service) ReplyChargeWhatsApp(ctx context.Context, companyID, chargeID, 
 	if len([]rune(msg)) > 1000 {
 		return nil, ErrWhatsAppReplyLong
 	}
-	if ch.ClientPhone == nil || strings.TrimSpace(*ch.ClientPhone) == "" {
-		return nil, ErrWhatsAppReplyPhone
-	}
-	if s.Notify == nil {
-		return nil, errors.New("WhatsApp no está configurado")
-	}
-	since := time.Now().Add(-24 * time.Hour)
-	open, err := s.Repo.HasInboundFromPhoneSince(ctx, companyID, *ch.ClientPhone, since)
+	ch, from, err := s.prepareWhatsAppReply(ctx, companyID, chargeID, memberUID)
 	if err != nil {
 		return nil, err
-	}
-	if !open {
-		return nil, ErrWhatsAppReplyWindow
-	}
-	from := ""
-	if tn, ferr := s.Repo.FirstActiveWhatsAppToForCompany(ctx, companyID); ferr == nil {
-		from = strings.TrimSpace(tn)
-	} else if !errors.Is(ferr, sql.ErrNoRows) {
-		return nil, ferr
 	}
 	if err := s.Notify.SendCompanyWhatsAppText(*ch, msg, from); err != nil {
 		return nil, err
 	}
-	to := notify.NormalizeWhatsAppForTwilio(*ch.ClientPhone)
+	return s.saveOutboundMessage(ctx, companyID, chargeID, from, *ch.ClientPhone, msg, nil)
+}
+
+func (s *Service) saveOutboundMessage(ctx context.Context, companyID, chargeID int64, from, clientPhone, msg string, media []model.MessageMedia) (*model.Message, error) {
+	to := notify.NormalizeWhatsAppForTwilio(clientPhone)
 	cid := chargeID
 	saved := &model.Message{
 		CompanyID:  companyID,
@@ -366,6 +380,7 @@ func (s *Service) ReplyChargeWhatsApp(ctx context.Context, companyID, chargeID, 
 		FromNumber: from,
 		ToNumber:   to,
 		Content:    msg,
+		Media:      media,
 		Direction:  "outbound",
 		Status:     "sent",
 	}

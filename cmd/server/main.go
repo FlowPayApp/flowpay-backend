@@ -62,7 +62,7 @@ func main() {
 		UploadDir:    cfg.UploadDir,
 		AppPublicURL: cfg.AppPublicURL,
 	}
-	wa := &service.WhatsAppService{Repo: repo}
+	wa := &service.WhatsAppService{Repo: repo, AccountSID: cfg.TwilioAccountSID, AuthToken: cfg.TwilioAuthToken}
 	deps := controller.Deps{
 		Svc:      svc,
 		WhatsApp: wa,

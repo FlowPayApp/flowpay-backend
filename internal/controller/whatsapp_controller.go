@@ -2,8 +2,10 @@ package controller
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -106,7 +108,8 @@ func (d *Deps) TwilioWhatsAppWebhook(c *gin.Context) {
 	from := form.Get("From")
 	to := form.Get("To")
 	body := form.Get("Body")
-	log.Printf("[FlowPay WhatsApp] webhook recibido From=%s To=%s BodyLen=%d", from, to, len(body))
+	media := inboundMedia(form)
+	log.Printf("[FlowPay WhatsApp] webhook recibido From=%s To=%s BodyLen=%d Media=%d", from, to, len(body), len(media))
 
 	if d.WhatsApp == nil {
 		log.Printf("[FlowPay WhatsApp] webhook: servicio nil")
@@ -114,7 +117,7 @@ func (d *Deps) TwilioWhatsAppWebhook(c *gin.Context) {
 		return
 	}
 
-	err := d.WhatsApp.HandleInbound(c.Request.Context(), from, to, body)
+	err := d.WhatsApp.HandleInbound(c.Request.Context(), from, to, body, media)
 	if err != nil {
 		if errors.Is(err, service.ErrUnknownWhatsAppTo) {
 			log.Printf("[FlowPay WhatsApp] webhook: To no registrado: %s", to)
@@ -126,6 +129,85 @@ func (d *Deps) TwilioWhatsAppWebhook(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusOK)
+}
+
+// Twilio admite hasta 10 adjuntos por mensaje.
+const maxInboundMedia = 10
+
+func inboundMedia(form url.Values) []model.MessageMedia {
+	n, _ := strconv.Atoi(form.Get("NumMedia"))
+	if n > maxInboundMedia {
+		n = maxInboundMedia
+	}
+	out := make([]model.MessageMedia, 0, n)
+	for i := 0; i < n; i++ {
+		u := strings.TrimSpace(form.Get(fmt.Sprintf("MediaUrl%d", i)))
+		if u == "" {
+			continue
+		}
+		out = append(out, model.MessageMedia{
+			URL:         u,
+			ContentType: strings.TrimSpace(form.Get(fmt.Sprintf("MediaContentType%d", i))),
+		})
+	}
+	return out
+}
+
+// Tipos que el navegador puede mostrar sin ejecutar código; el resto se entrega como descarga.
+var inlineMediaTypes = map[string]bool{
+	"image/jpeg":      true,
+	"image/png":       true,
+	"image/webp":      true,
+	"image/gif":       true,
+	"application/pdf": true,
+}
+
+func inlineMedia(contentType string) bool {
+	base := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	return inlineMediaTypes[base] || strings.HasPrefix(base, "audio/") || strings.HasPrefix(base, "video/")
+}
+
+func (d *Deps) ChargeInboundMedia(c *gin.Context) {
+	chargeID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad id"})
+		return
+	}
+	msgID, err := strconv.ParseInt(c.Param("msgId"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad message id"})
+		return
+	}
+	index, err := strconv.Atoi(c.Param("index"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "bad index"})
+		return
+	}
+	if d.WhatsApp == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "whatsapp no configurado"})
+		return
+	}
+	body, contentType, size, err := d.WhatsApp.OpenChargeMedia(c.Request.Context(), d.companyID(c), chargeID, d.memberUID(c), msgID, index)
+	if err != nil {
+		if service.ErrNotFound(err) || errors.Is(err, service.ErrMediaNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+		log.Printf("[FlowPay WhatsApp] adjunto charge=%d msg=%d index=%d: %v", chargeID, msgID, index, err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "no se pudo obtener el adjunto"})
+		return
+	}
+	defer body.Close()
+	disposition := "inline"
+	if !inlineMedia(contentType) {
+		contentType = "application/octet-stream"
+		disposition = "attachment"
+	}
+	c.DataFromReader(http.StatusOK, size, contentType, body, map[string]string{
+		"Content-Disposition":    disposition,
+		"Cache-Control":          "private, max-age=3600",
+		"X-Content-Type-Options": "nosniff",
+	})
 }
 
 func twilioWebhookFullURL(c *gin.Context) string {

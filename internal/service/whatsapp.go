@@ -1,12 +1,16 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"strings"
+	"time"
 
 	"github.com/flowpay/flowpay-backend/internal/model"
 	"github.com/flowpay/flowpay-backend/internal/notify"
@@ -24,13 +28,23 @@ var (
 	ErrCompanyNotFound = errors.New("empresa no encontrada")
 )
 
-// WhatsAppService solo procesa webhooks entrantes de Twilio (guardar en messages).
+// ErrMediaNotFound el adjunto no existe o no pertenece al cobro.
+var ErrMediaNotFound = errors.New("adjunto no encontrado")
+
+// Solo a Twilio se le envían las credenciales de la cuenta: la URL del adjunto llega por el webhook.
+const twilioMediaPrefix = "https://api.twilio.com/"
+
+var mediaClient = &http.Client{Timeout: 30 * time.Second}
+
+// WhatsAppService procesa webhooks entrantes de Twilio (guardar en messages) y entrega sus adjuntos.
 type WhatsAppService struct {
-	Repo *repository.DB
+	Repo       *repository.DB
+	AccountSID string
+	AuthToken  string
 }
 
 // HandleInbound guarda mensaje entrante enrutado por número receptor (To).
-func (s *WhatsAppService) HandleInbound(ctx context.Context, fromRaw, toRaw, body string) error {
+func (s *WhatsAppService) HandleInbound(ctx context.Context, fromRaw, toRaw, body string, media []model.MessageMedia) error {
 	toNorm := canonicalWhatsApp(toRaw)
 	if toNorm == "" {
 		return fmt.Errorf("to vacío")
@@ -53,13 +67,14 @@ func (s *WhatsAppService) HandleInbound(ctx context.Context, fromRaw, toRaw, bod
 	} else if err != nil {
 		log.Printf("[FlowPay WhatsApp] warn asociando cobro inbound: %v", err)
 	}
-	log.Printf("[FlowPay WhatsApp] inbound company=%d from=%s to=%s charge_id=%v len=%d", wn.CompanyID, fromNorm, toNorm, chargeID, len(content))
+	log.Printf("[FlowPay WhatsApp] inbound company=%d from=%s to=%s charge_id=%v len=%d media=%d", wn.CompanyID, fromNorm, toNorm, chargeID, len(content), len(media))
 	_, err = s.Repo.InsertMessage(ctx, &model.Message{
 		CompanyID:  wn.CompanyID,
 		ChargeID:   chargeID,
 		FromNumber: fromNorm,
 		ToNumber:   toNorm,
 		Content:    content,
+		Media:      media,
 		Direction:  "inbound",
 		Status:     "received",
 	})
@@ -67,6 +82,57 @@ func (s *WhatsAppService) HandleInbound(ctx context.Context, fromRaw, toRaw, bod
 		log.Printf("[FlowPay WhatsApp] error guardando inbound: %v", err)
 	}
 	return err
+}
+
+// OpenChargeMedia abre un adjunto de un mensaje del cobro: los recibidos se descargan de Twilio,
+// los enviados por la empresa salen de la base de datos.
+// El llamador debe cerrar el cuerpo devuelto.
+func (s *WhatsAppService) OpenChargeMedia(ctx context.Context, companyID, chargeID, memberUID, msgID int64, index int) (io.ReadCloser, string, int64, error) {
+	if _, err := s.Repo.GetCharge(ctx, companyID, chargeID, memberUID); err != nil {
+		return nil, "", 0, err
+	}
+	m, err := s.Repo.GetMessageByID(ctx, companyID, msgID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, "", 0, ErrMediaNotFound
+		}
+		return nil, "", 0, err
+	}
+	if m.ChargeID == nil || *m.ChargeID != chargeID || index < 0 || index >= len(m.Media) {
+		return nil, "", 0, ErrMediaNotFound
+	}
+	media := m.Media[index]
+	if media.FileToken != "" {
+		f, err := s.Repo.GetMessageFile(ctx, companyID, media.FileToken)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil, "", 0, ErrMediaNotFound
+			}
+			return nil, "", 0, err
+		}
+		return io.NopCloser(bytes.NewReader(f.Data)), f.ContentType, int64(len(f.Data)), nil
+	}
+	if !strings.HasPrefix(media.URL, twilioMediaPrefix) {
+		return nil, "", 0, ErrMediaNotFound
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, media.URL, nil)
+	if err != nil {
+		return nil, "", 0, err
+	}
+	req.SetBasicAuth(s.AccountSID, s.AuthToken)
+	resp, err := mediaClient.Do(req)
+	if err != nil {
+		return nil, "", 0, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, "", 0, fmt.Errorf("twilio media: %s", resp.Status)
+	}
+	contentType := media.ContentType
+	if contentType == "" {
+		contentType = resp.Header.Get("Content-Type")
+	}
+	return resp.Body, contentType, resp.ContentLength, nil
 }
 
 // ListActiveNumbers números Business asignados (solo activos).

@@ -125,6 +125,16 @@ func (d *Dispatcher) SendCompanyWhatsAppText(ch repository.Charge, body, from st
 	return d.sendWhatsAppFrom(from, d.resolveWhatsApp(ch.ClientPhone), body, nil)
 }
 
+// SendCompanyWhatsAppFile envía un archivo que Twilio descarga desde mediaURL; body va como pie.
+func (d *Dispatcher) SendCompanyWhatsAppFile(ch repository.Charge, body, from, mediaURL string) error {
+	return d.sendWhatsAppFrom(from, d.resolveWhatsApp(ch.ClientPhone), body, []string{mediaURL})
+}
+
+// PublicBaseURL base HTTPS pública del API (FLOWPAY_PUBLIC_BASE_URL), sin barra final.
+func (d *Dispatcher) PublicBaseURL() string {
+	return d.publicBaseURL
+}
+
 // SendCompanyWhatsApp envía desde el WhatsApp Business de la empresa (from vacío cae al número global).
 func (d *Dispatcher) SendCompanyWhatsApp(ch repository.Charge, body, from string) error {
 	media := d.whatsAppMediaURLs(ch)

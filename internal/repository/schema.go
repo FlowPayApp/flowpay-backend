@@ -94,6 +94,22 @@ func (db *DB) EnsureWhatsAppSchema(ctx context.Context) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_company_charge
 			ON messages (company_id, charge_id, created_at DESC)`,
+		`ALTER TABLE messages ADD COLUMN IF NOT EXISTS media JSONB NOT NULL DEFAULT '[]'::jsonb`,
+		// El DEFAULT marca como leídos los mensajes que ya existían; los nuevos entran sin leer.
+		`ALTER TABLE messages ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ DEFAULT NOW()`,
+		`ALTER TABLE messages ALTER COLUMN read_at DROP DEFAULT`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_company_unread
+			ON messages (company_id, charge_id)
+			WHERE direction = 'inbound' AND read_at IS NULL`,
+		`CREATE TABLE IF NOT EXISTS message_files (
+			id BIGSERIAL PRIMARY KEY,
+			company_id BIGINT NOT NULL,
+			token TEXT NOT NULL UNIQUE,
+			content_type TEXT NOT NULL,
+			file_name TEXT NOT NULL DEFAULT '',
+			data BYTEA NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
 	}
 	for _, q := range stmts {
 		if _, err := db.db.ExecContext(ctx, q); err != nil {
