@@ -55,6 +55,9 @@ type Reminder struct {
 	Message   *string    `json:"message,omitempty"`
 	CreatedAt time.Time  `json:"created_at"`
 	SentAt    *time.Time `json:"sent_at,omitempty"`
+	// DeliveryStatus solo en WhatsApp: lo que Twilio informa de la entrega. Vacío si no hay seguimiento.
+	DeliveryStatus string `json:"delivery_status,omitempty"`
+	DeliveryError  string `json:"delivery_error,omitempty"`
 }
 
 type DashboardTotals struct {
@@ -216,7 +219,7 @@ func (db *DB) MarkChargePaid(ctx context.Context, chargeID int64, amount float64
 
 func (db *DB) ListReminders(ctx context.Context, chargeID int64) ([]Reminder, error) {
 	q := `
-SELECT id, charge_id, kind, channel, status, message, created_at, sent_at
+SELECT id, charge_id, kind, channel, status, message, created_at, sent_at, delivery_status, delivery_error
 FROM reminders WHERE charge_id = $1 ORDER BY created_at ASC, id ASC
 `
 	rows, err := db.db.QueryContext(ctx, q, chargeID)
@@ -227,7 +230,7 @@ FROM reminders WHERE charge_id = $1 ORDER BY created_at ASC, id ASC
 	var out []Reminder
 	for rows.Next() {
 		var rm Reminder
-		if err := rows.Scan(&rm.ID, &rm.ChargeID, &rm.Kind, &rm.Channel, &rm.Status, &rm.Message, &rm.CreatedAt, &rm.SentAt); err != nil {
+		if err := rows.Scan(&rm.ID, &rm.ChargeID, &rm.Kind, &rm.Channel, &rm.Status, &rm.Message, &rm.CreatedAt, &rm.SentAt, &rm.DeliveryStatus, &rm.DeliveryError); err != nil {
 			return nil, err
 		}
 		out = append(out, rm)
@@ -245,6 +248,16 @@ func (db *DB) InsertReminder(ctx context.Context, chargeID int64, kind, channel,
 		return 0, err
 	}
 	return id, nil
+}
+
+// SetReminderDelivery asocia el WhatsApp de un recordatorio a su id en Twilio para seguir la entrega.
+// Si Twilio ya avisó un estado más avanzado, se conserva.
+func (db *DB) SetReminderDelivery(ctx context.Context, reminderID int64, sid, status string) error {
+	_, err := db.db.ExecContext(ctx, `
+UPDATE reminders SET provider_sid = $2,
+       delivery_status = CASE WHEN `+deliveryRank("delivery_status")+` < `+deliveryRank("$3::text")+` THEN $3 ELSE delivery_status END
+WHERE id = $1`, reminderID, sid, status)
+	return err
 }
 
 // ChargesDueSoon: no cobrados, due_date entre hoy y hoy+days (inclusive upper bound por día).
@@ -313,6 +326,48 @@ func (db *DB) CountRemindersByKind(ctx context.Context, chargeID int64, kind str
 		chargeID, kind,
 	).Scan(&n)
 	return n, err
+}
+
+// ClaimDailyJob reserva la corrida de una tarea para el día (YYYY-MM-DD).
+// Devuelve false si ese día ya la tomó otra ejecución o instancia del API.
+func (db *DB) ClaimDailyJob(ctx context.Context, name, day string) (bool, error) {
+	res, err := db.db.ExecContext(ctx, `
+INSERT INTO job_runs (name, run_on, started_at) VALUES ($1, $2::date, NOW())
+ON CONFLICT (name) DO UPDATE SET run_on = EXCLUDED.run_on, started_at = NOW()
+WHERE job_runs.run_on < EXCLUDED.run_on`, name, day)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
+// LastManualReminderByChannel último recordatorio manual enviado de un cobro, por canal.
+// Los WhatsApp que no se entregaron no cuentan.
+func (db *DB) LastManualReminderByChannel(ctx context.Context, chargeID int64) (map[string]time.Time, error) {
+	rows, err := db.db.QueryContext(ctx, `
+SELECT channel, MAX(COALESCE(sent_at, created_at))
+FROM reminders
+WHERE charge_id = $1 AND kind = 'manual' AND status = 'sent'
+  AND delivery_status NOT IN ('failed', 'undelivered')
+GROUP BY channel`, chargeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]time.Time{}
+	for rows.Next() {
+		var channel string
+		var at time.Time
+		if err := rows.Scan(&channel, &at); err != nil {
+			return nil, err
+		}
+		out[channel] = at
+	}
+	return out, rows.Err()
 }
 
 // SetChargeAttachment guarda token y extensión del archivo (sin punto).
