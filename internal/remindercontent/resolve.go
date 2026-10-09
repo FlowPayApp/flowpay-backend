@@ -123,6 +123,12 @@ func defaultSubjectBody(phase string, priorOverdue int, ch repository.Charge) (s
 	}
 }
 
+// DefaultEmail asunto y texto del sistema para la fase, tal como sale si la empresa no escribe el suyo.
+func DefaultEmail(phase string, ch repository.Charge, payURL string) (subject, body string) {
+	subject, body = defaultSubjectBody(phase, 0, ch)
+	return subject, withPayLink(body, payURL)
+}
+
 // PhaseFromCharge clasifica el cobro según la fecha de hoy y recordatorios de mora previos.
 func PhaseFromCharge(ch repository.Charge, now time.Time, priorOverdue int) (phase string, daysUntil int) {
 	t0 := dateOnly(now)

@@ -332,6 +332,40 @@ type MessagingSettingsResponse struct {
 	ReminderPolicy       domain.ReminderPolicy            `json:"reminder_policy"`
 	// SendTime hora diaria (HH:MM, hora de Chile por defecto) del ciclo de recordatorios automáticos.
 	SendTime string `json:"send_time"`
+	// Defaults lo que recibe el cliente en cada fase con un cobro de ejemplo: la plantilla de WhatsApp
+	// aprobada (no editable) y el correo del sistema que se usa si la empresa no escribe el suyo.
+	Defaults map[string]MessagingPhaseDefaults `json:"defaults"`
+}
+
+type MessagingPhaseDefaults struct {
+	WhatsApp     string `json:"whatsapp"`
+	EmailSubject string `json:"email_subject"`
+	EmailBody    string `json:"email_body"`
+}
+
+func (s *Service) messagingDefaults() map[string]MessagingPhaseDefaults {
+	today := dateOnly(time.Now())
+	payURL := strings.TrimRight(strings.TrimSpace(s.AppPublicURL), "/") + "/pay/ejemplo"
+	if strings.TrimSpace(s.AppPublicURL) == "" {
+		payURL = "https://geldflus.com/pay/ejemplo"
+	}
+	phases := []struct {
+		phase string
+		due   time.Time
+	}{
+		{remindercontent.PhaseApproaching, today.AddDate(0, 0, 3)},
+		{remindercontent.PhaseDueToday, today},
+		{remindercontent.PhaseOverdueFirst, today.AddDate(0, 0, -2)},
+		{remindercontent.PhaseOverdueFollowUp, today.AddDate(0, 0, -8)},
+	}
+	out := make(map[string]MessagingPhaseDefaults, len(phases))
+	for _, p := range phases {
+		sample := repository.Charge{Amount: 150000, DueDate: p.due, ClientName: "Sucursal Centro"}
+		wa, _ := notify.BuildWhatsAppTemplate(p.phase, sample, payURL, notify.TemplateSIDs{})
+		subject, body := remindercontent.DefaultEmail(p.phase, sample, payURL)
+		out[p.phase] = MessagingPhaseDefaults{WhatsApp: wa.Preview, EmailSubject: subject, EmailBody: body}
+	}
+	return out
 }
 
 // MessagingTemplateInput fila de plantilla desde el panel.
@@ -373,6 +407,7 @@ func (s *Service) GetCompanyMessagingSettings(ctx context.Context, companyID int
 		Templates:            tpl,
 		ReminderPolicy:       policy,
 		SendTime:             s.ReminderSendTime,
+		Defaults:             s.messagingDefaults(),
 	}, nil
 }
 
