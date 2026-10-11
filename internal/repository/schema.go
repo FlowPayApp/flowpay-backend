@@ -33,3 +33,138 @@ func (db *DB) EnsureReminderTemplateColumns(ctx context.Context) error {
 	}
 	return nil
 }
+
+// EnsureDeliverySchema guarda el id de Twilio de cada WhatsApp enviado y lo que Twilio informa de su entrega.
+// En messages el estado vive en status; en reminders, status sigue siendo el del recordatorio (sent/scheduled).
+func (db *DB) EnsureDeliverySchema(ctx context.Context) error {
+	stmts := []string{
+		`ALTER TABLE messages ADD COLUMN IF NOT EXISTS provider_sid TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE messages ADD COLUMN IF NOT EXISTS delivery_error TEXT NOT NULL DEFAULT ''`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_provider_sid ON messages (provider_sid) WHERE provider_sid <> ''`,
+		`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS provider_sid TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS delivery_status TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS delivery_error TEXT NOT NULL DEFAULT ''`,
+		`CREATE INDEX IF NOT EXISTS idx_reminders_provider_sid ON reminders (provider_sid) WHERE provider_sid <> ''`,
+	}
+	for _, q := range stmts {
+		if _, err := db.db.ExecContext(ctx, q); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// EnsureReminderPolicySchema frecuencia de recordatorios automáticos: por empresa y, si se quiere, por cobro.
+func (db *DB) EnsureReminderPolicySchema(ctx context.Context) error {
+	stmts := []string{
+		`ALTER TABLE companies ADD COLUMN IF NOT EXISTS reminder_days_before TEXT NOT NULL DEFAULT '3,1,0'`,
+		`ALTER TABLE companies ADD COLUMN IF NOT EXISTS reminder_overdue_every INT NOT NULL DEFAULT 3`,
+		`ALTER TABLE companies ADD COLUMN IF NOT EXISTS reminder_overdue_max INT NOT NULL DEFAULT 5`,
+		`ALTER TABLE charges ADD COLUMN IF NOT EXISTS reminder_mode TEXT NOT NULL DEFAULT 'company'`,
+		`ALTER TABLE charges ADD COLUMN IF NOT EXISTS reminder_channel TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE charges ADD COLUMN IF NOT EXISTS reminder_days_before TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE charges ADD COLUMN IF NOT EXISTS reminder_overdue_every INT NOT NULL DEFAULT 0`,
+		`ALTER TABLE charges ADD COLUMN IF NOT EXISTS reminder_overdue_max INT NOT NULL DEFAULT 0`,
+	}
+	for _, q := range stmts {
+		if _, err := db.db.ExecContext(ctx, q); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// EnsureJobRunsSchema registra el último día en que corrió cada tarea programada.
+func (db *DB) EnsureJobRunsSchema(ctx context.Context) error {
+	_, err := db.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS job_runs (
+		name TEXT PRIMARY KEY,
+		run_on DATE NOT NULL,
+		started_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+	)`)
+	return err
+}
+
+// EnsureMailboxSchema guarda el buzón SMTP con el que cada empresa envía recordatorios.
+func (db *DB) EnsureMailboxSchema(ctx context.Context) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS company_mailboxes (
+			id BIGSERIAL PRIMARY KEY,
+			company_id BIGINT NOT NULL,
+			from_name TEXT NOT NULL DEFAULT '',
+			from_email TEXT NOT NULL,
+			smtp_host TEXT NOT NULL,
+			smtp_port TEXT NOT NULL DEFAULT '587',
+			smtp_username TEXT NOT NULL,
+			smtp_password TEXT NOT NULL,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_company_mailboxes_company ON company_mailboxes (company_id)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_company_mailboxes_from_email ON company_mailboxes (LOWER(from_email))`,
+	}
+	for _, q := range stmts {
+		if _, err := db.db.ExecContext(ctx, q); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// EnsureWhatsAppSchema crea las tablas que enrutan el WhatsApp Business de cada empresa.
+func (db *DB) EnsureWhatsAppSchema(ctx context.Context) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS whatsapp_numbers (
+			id BIGSERIAL PRIMARY KEY,
+			company_id BIGINT NOT NULL,
+			phone_number TEXT NOT NULL,
+			twilio_sid TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'active',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`ALTER TABLE whatsapp_numbers ADD COLUMN IF NOT EXISTS twilio_sid TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE whatsapp_numbers ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active'`,
+		`ALTER TABLE whatsapp_numbers ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS uq_whatsapp_numbers_active_phone
+			ON whatsapp_numbers (LOWER(phone_number))
+			WHERE status = 'active'`,
+		// El UNIQUE original de phone_number bloqueaba reasignar un número ya desactivado.
+		`ALTER TABLE whatsapp_numbers DROP CONSTRAINT IF EXISTS whatsapp_numbers_phone_number_key`,
+		`CREATE INDEX IF NOT EXISTS idx_whatsapp_numbers_company_active
+			ON whatsapp_numbers (company_id)
+			WHERE status = 'active'`,
+		`CREATE TABLE IF NOT EXISTS messages (
+			id BIGSERIAL PRIMARY KEY,
+			company_id BIGINT NOT NULL,
+			charge_id BIGINT,
+			from_number TEXT NOT NULL DEFAULT '',
+			to_number TEXT NOT NULL DEFAULT '',
+			content TEXT NOT NULL DEFAULT '',
+			direction TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'received',
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_company_charge
+			ON messages (company_id, charge_id, created_at DESC)`,
+		`ALTER TABLE messages ADD COLUMN IF NOT EXISTS media JSONB NOT NULL DEFAULT '[]'::jsonb`,
+		// El DEFAULT marca como leídos los mensajes que ya existían; los nuevos entran sin leer.
+		`ALTER TABLE messages ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ DEFAULT NOW()`,
+		`ALTER TABLE messages ALTER COLUMN read_at DROP DEFAULT`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_company_unread
+			ON messages (company_id, charge_id)
+			WHERE direction = 'inbound' AND read_at IS NULL`,
+		`CREATE TABLE IF NOT EXISTS message_files (
+			id BIGSERIAL PRIMARY KEY,
+			company_id BIGINT NOT NULL,
+			token TEXT NOT NULL UNIQUE,
+			content_type TEXT NOT NULL,
+			file_name TEXT NOT NULL DEFAULT '',
+			data BYTEA NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+	}
+	for _, q := range stmts {
+		if _, err := db.db.ExecContext(ctx, q); err != nil {
+			return err
+		}
+	}
+	return nil
+}

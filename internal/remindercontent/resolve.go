@@ -2,6 +2,8 @@ package remindercontent
 
 import (
 	"context"
+	"log"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -54,16 +56,16 @@ func ApplyPlaceholders(tpl string, ch repository.Charge, companyName, transferIn
 	fecha := notify.FormatDueDateSpanish(ch.DueDate)
 	s := tpl
 	repl := map[string]string{
-		"{{monto}}":                   "$" + monto,
-		"{{monto_sin_signo}}":         monto,
-		"{{monto_entero}}":            strconv.FormatInt(int64(ch.Amount+0.5), 10),
-		"{{fecha_vencimiento}}":       fecha,
-		"{{nombre_sucursal}}":         ch.ClientName,
-		"{{datos_transferencia}}":     transferInstructions,
-		"{{url_pago}}":                paymentURL,
-		"{{empresa}}":                 companyName,
-		"{{charge_id}}":               strconv.FormatInt(ch.ID, 10),
-		"{{client_id}}":               strconv.FormatInt(ch.ClientID, 10),
+		"{{monto}}":               "$" + monto,
+		"{{monto_sin_signo}}":     monto,
+		"{{monto_entero}}":        strconv.FormatInt(int64(ch.Amount+0.5), 10),
+		"{{fecha_vencimiento}}":   fecha,
+		"{{nombre_sucursal}}":     ch.ClientName,
+		"{{datos_transferencia}}": transferInstructions,
+		"{{url_pago}}":            paymentURL,
+		"{{empresa}}":             companyName,
+		"{{charge_id}}":           strconv.FormatInt(ch.ID, 10),
+		"{{client_id}}":           strconv.FormatInt(ch.ClientID, 10),
 	}
 	for k, v := range repl {
 		s = strings.ReplaceAll(s, k, v)
@@ -121,6 +123,12 @@ func defaultSubjectBody(phase string, priorOverdue int, ch repository.Charge) (s
 	}
 }
 
+// DefaultEmail asunto y texto del sistema para la fase, tal como sale si la empresa no escribe el suyo.
+func DefaultEmail(phase string, ch repository.Charge, payURL string) (subject, body string) {
+	subject, body = defaultSubjectBody(phase, 0, ch)
+	return subject, withPayLink(body, payURL)
+}
+
 // PhaseFromCharge clasifica el cobro según la fecha de hoy y recordatorios de mora previos.
 func PhaseFromCharge(ch repository.Charge, now time.Time, priorOverdue int) (phase string, daysUntil int) {
 	t0 := dateOnly(now)
@@ -138,20 +146,24 @@ func PhaseFromCharge(ch repository.Charge, now time.Time, priorOverdue int) (pha
 }
 
 // ResolveReminder resuelve el correo y el WhatsApp (plantilla de la empresa o texto del sistema).
-func ResolveReminder(ctx context.Context, repo *repository.DB, companyID int64, phase string, daysUntil int, priorOverdue int, ch repository.Charge) (emailSubject, emailBody, whatsappBody string, err error) {
+// appPublicURL es el origen del frontend; con eso {{url_pago}} es el portal de la sucursal.
+func ResolveReminder(ctx context.Context, repo *repository.DB, companyID int64, phase string, daysUntil int, priorOverdue int, ch repository.Charge, appPublicURL string) (emailSubject, emailBody, whatsappBody, payURL string, err error) {
 	rows, err := repo.ListReminderTemplates(ctx, companyID)
 	if err != nil {
 		rows = nil
 	}
 	cm, err := repo.GetCompanyMessaging(ctx, companyID)
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
-	payURL := buildPaymentURL(cm.PaymentURLTemplate, ch)
+	payURL = buildPaymentURL(cm.PaymentURLTemplate, ch)
+	if link := clientPortalURL(ctx, repo, appPublicURL, companyID, ch.ClientID); link != "" {
+		payURL = link
+	}
 	defSubject, defBody := defaultSubjectBody(phase, priorOverdue, ch)
 	t := pickTemplate(rows, phase, daysUntil)
 	if t == nil {
-		return defSubject, defBody, defBody, nil
+		return defSubject, withPayLink(defBody, payURL), withPayLink(defBody, payURL), payURL, nil
 	}
 	emailBody = strings.TrimSpace(t.Body)
 	if emailBody == "" {
@@ -171,5 +183,30 @@ func ResolveReminder(ctx context.Context, repo *repository.DB, companyID int64, 
 	} else {
 		whatsappBody = ApplyPlaceholders(t.WhatsAppBody, ch, cm.Name, cm.TransferInstructions, payURL)
 	}
-	return emailSubject, emailBody, whatsappBody, nil
+	return emailSubject, withPayLink(emailBody, payURL), withPayLink(whatsappBody, payURL), payURL, nil
+}
+
+func clientPortalURL(ctx context.Context, repo *repository.DB, appPublicURL string, companyID, clientID int64) string {
+	base := strings.TrimRight(strings.TrimSpace(appPublicURL), "/")
+	if base == "" || clientID <= 0 {
+		return ""
+	}
+	token, err := repo.EnsureClientPaymentToken(ctx, companyID, clientID)
+	if err != nil || strings.TrimSpace(token) == "" {
+		log.Printf("[FlowPay] enlace de pago de la sucursal: %v", err)
+		return ""
+	}
+	return base + "/pay/" + url.PathEscape(token)
+}
+
+func withPayLink(body, payURL string) string {
+	body = strings.TrimSpace(body)
+	payURL = strings.TrimSpace(payURL)
+	if payURL == "" || strings.Contains(body, payURL) {
+		return body
+	}
+	if body == "" {
+		return "Paga aquí: " + payURL
+	}
+	return body + "\n\nPaga aquí: " + payURL
 }

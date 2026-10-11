@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -85,20 +86,61 @@ func dateOnly(t time.Time) time.Time {
 
 // SendReminderEmail envía correo con asunto y cuerpo ya resueltos (p. ej. plantillas por empresa).
 func (d *Dispatcher) SendReminderEmail(ch repository.Charge, subject, body string) {
+	_ = d.SendReminderEmailFrom(ch, subject, body, nil)
+}
+
+// SendReminderEmailFrom envía desde el buzón de la empresa. mailbox nil usa el SMTP global.
+func (d *Dispatcher) SendReminderEmailFrom(ch repository.Charge, subject, body string, mailbox *SMTPConfig) error {
 	subj := strings.TrimSpace(subject)
 	if subj == "" {
 		subj = "Recordatorio FlowPay"
 	}
-	d.sendEmail(d.resolveEmail(ch.ClientEmail), subj, body)
+	return d.sendEmailWith(mailbox, d.resolveEmail(ch.ClientEmail), subj, body)
 }
 
-// SendReminderWhatsApp envía WhatsApp con cuerpo ya resuelto.
+// SendReminderWhatsApp envía WhatsApp con cuerpo ya resuelto, usando el From global si la empresa no tiene número.
 func (d *Dispatcher) SendReminderWhatsApp(ch repository.Charge, body string) {
+	_ = d.SendCompanyWhatsApp(ch, body, "")
+}
+
+// SendCompanyWhatsAppTemplate envía la plantilla Utility de la fase (monto, fecha, tienda, enlace).
+// El preview es el texto que ve el cliente, para guardarlo en el historial del cobro.
+func (d *Dispatcher) SendCompanyWhatsAppTemplate(ch repository.Charge, from, phase, payURL string) (string, SentWhatsApp, error) {
+	var sids TemplateSIDs
+	if d.twilio != nil {
+		sids = d.twilio.Templates
+	}
+	msg, ok := BuildWhatsAppTemplate(phase, ch, payURL, sids)
+	if !ok {
+		return "", SentWhatsApp{}, fmt.Errorf("no hay plantilla de WhatsApp para esta fase")
+	}
+	sent, err := d.sendWhatsAppContent(from, d.resolveWhatsApp(ch.ClientPhone), msg.ContentSID, msg.Variables)
+	return msg.Preview, sent, err
+}
+
+// SendCompanyWhatsAppText envía un texto libre, sin adjuntar la factura del cobro.
+func (d *Dispatcher) SendCompanyWhatsAppText(ch repository.Charge, body, from string) (SentWhatsApp, error) {
+	return d.sendWhatsAppFrom(from, d.resolveWhatsApp(ch.ClientPhone), body, nil)
+}
+
+// SendCompanyWhatsAppFile envía un archivo que Twilio descarga desde mediaURL; body va como pie.
+func (d *Dispatcher) SendCompanyWhatsAppFile(ch repository.Charge, body, from, mediaURL string) (SentWhatsApp, error) {
+	return d.sendWhatsAppFrom(from, d.resolveWhatsApp(ch.ClientPhone), body, []string{mediaURL})
+}
+
+// PublicBaseURL base HTTPS pública del API (FLOWPAY_PUBLIC_BASE_URL), sin barra final.
+func (d *Dispatcher) PublicBaseURL() string {
+	return d.publicBaseURL
+}
+
+// SendCompanyWhatsApp envía desde el WhatsApp Business de la empresa (from vacío cae al número global).
+func (d *Dispatcher) SendCompanyWhatsApp(ch repository.Charge, body, from string) error {
 	media := d.whatsAppMediaURLs(ch)
 	if len(media) == 0 && ch.AttachmentToken != nil && *ch.AttachmentToken != "" {
 		log.Printf("[FlowPay] Hay adjunto en cobro #%d pero FLOWPAY_PUBLIC_BASE_URL no está definido: WhatsApp irá sin archivo", ch.ID)
 	}
-	d.sendWhatsApp(d.resolveWhatsApp(ch.ClientPhone), body, media)
+	_, err := d.sendWhatsAppFrom(from, d.resolveWhatsApp(ch.ClientPhone), body, media)
+	return err
 }
 
 // SendApproaching antes del día de vencimiento (mensaje leve).

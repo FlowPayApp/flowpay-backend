@@ -9,7 +9,9 @@ import (
 
 func Register(r *gin.Engine, deps controller.Deps, jwtMiddleware gin.HandlerFunc) {
 	r.GET("/api/public/attachments/:token", deps.PublicAttachment)
+	r.GET("/api/public/chat-files/:token/:name", deps.PublicChatFile)
 	r.POST("/api/webhooks/twilio/whatsapp", deps.TwilioWhatsAppWebhook)
+	r.POST("/api/webhooks/twilio/status", deps.TwilioStatusWebhook)
 
 	api := r.Group("/api")
 	api.Use(jwtMiddleware)
@@ -21,11 +23,20 @@ func Register(r *gin.Engine, deps controller.Deps, jwtMiddleware gin.HandlerFunc
 		api.DELETE("/charges/:id", deps.DeleteCharge)
 		api.GET("/charges/:id/reminders", deps.ListReminders)
 		api.GET("/charges/:id/inbound-whatsapp", deps.ListChargeInboundWhatsApp)
+		api.GET("/charges/:id/inbound-whatsapp/:msgId/media/:index", deps.ChargeInboundMedia)
+		api.POST("/charges/:id/whatsapp", deps.ReplyChargeWhatsApp)
+		api.POST("/charges/:id/whatsapp/file", deps.SendChargeWhatsAppFile)
+		api.POST("/charges/:id/read", deps.MarkChargeRead)
+		api.GET("/inbox", deps.Inbox)
 		api.POST("/charges/:id/inbound-whatsapp/simulate", deps.SimulateChargeInboundWhatsApp)
 		api.POST("/charges/:id/reminders", deps.SendReminder)
 		api.POST("/charges/:id/attachment", deps.UploadChargeAttachment)
 		api.GET("/dashboard", deps.Dashboard)
 		api.GET("/platform/overview", deps.PlatformOverview)
+		api.GET("/platform/whatsapp-numbers", deps.ListPlatformWhatsAppNumbers)
+		api.PUT("/platform/companies/:id/whatsapp", deps.PutCompanyWhatsApp)
+		api.GET("/platform/mailboxes", deps.ListPlatformMailboxes)
+		api.PUT("/platform/companies/:id/mailbox", deps.PutCompanyMailbox)
 		api.GET("/company/messaging", deps.GetCompanyMessaging)
 		api.PUT("/company/messaging", deps.PutCompanyMessaging)
 	}

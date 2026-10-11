@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -18,6 +19,42 @@ import (
 type ChargeDTO struct {
 	repository.Charge
 	Status string `json:"status"`
+	// NextReminderAt solo en el detalle: canales que siguen en espera y desde cuándo se puede volver a enviar.
+	NextReminderAt map[string]time.Time `json:"next_reminder_at,omitempty"`
+	// Solo en el detalle: recordatorios automáticos. ReminderPolicy es la que rige (la propia o la de la empresa).
+	ReminderMode    string                 `json:"reminder_mode,omitempty"`
+	ReminderChannel string                 `json:"reminder_channel,omitempty"`
+	ReminderPolicy  *domain.ReminderPolicy `json:"reminder_policy,omitempty"`
+	// CompanyReminderPolicy la de la empresa, para volver a ella desde una personalizada.
+	CompanyReminderPolicy *domain.ReminderPolicy `json:"company_reminder_policy,omitempty"`
+}
+
+// ReminderCooldown espera mínima entre recordatorios manuales de un mismo cobro por el mismo canal.
+const ReminderCooldown = time.Hour
+
+var (
+	// ErrReminderNoChannel no se eligió ningún canal.
+	ErrReminderNoChannel = errors.New("elige al menos un canal: WhatsApp o correo")
+	// ErrReminderBadChannel canal desconocido.
+	ErrReminderBadChannel = errors.New("canal no válido; usa whatsapp o email")
+	// ErrReminderNoEmail la sucursal no tiene correo.
+	ErrReminderNoEmail = errors.New("la sucursal no tiene correo registrado")
+	// ErrReminderNoPhone la sucursal no tiene teléfono.
+	ErrReminderNoPhone = errors.New("la sucursal no tiene teléfono de WhatsApp registrado")
+)
+
+// ReminderCooldownError un canal pedido todavía está en espera.
+type ReminderCooldownError struct {
+	Channel string
+	Until   time.Time
+}
+
+func (e *ReminderCooldownError) Error() string {
+	label := "correo"
+	if e.Channel == "whatsapp" {
+		label = "WhatsApp"
+	}
+	return fmt.Sprintf("ya se envió un recordatorio por %s hace poco; podrás enviar otro a las %s", label, e.Until.Format("15:04"))
 }
 
 type DashboardResponse struct {
@@ -37,9 +74,12 @@ type PlatformOverviewResponse struct {
 }
 
 type Service struct {
-	Repo      *repository.DB
-	Notify    *notify.Dispatcher
-	UploadDir string
+	Repo         *repository.DB
+	Notify       *notify.Dispatcher
+	UploadDir    string
+	AppPublicURL string
+	// ReminderSendTime hora diaria (HH:MM) del ciclo de recordatorios automáticos, para mostrarla en el panel.
+	ReminderSendTime string
 }
 
 func (s *Service) withStatus(ch repository.Charge) ChargeDTO {
@@ -65,18 +105,52 @@ func (s *Service) GetCharge(ctx context.Context, companyID, id, memberUID int64)
 		return nil, err
 	}
 	dto := s.withStatus(*ch)
+	if dto.Status != "paid" {
+		next, err := s.nextReminderAt(ctx, id, time.Now())
+		if err != nil {
+			log.Printf("[FlowPay] cobro %d sin espera de recordatorios: %v", id, err)
+		}
+		dto.NextReminderAt = next
+	}
+	if err := s.withReminders(ctx, &dto); err != nil {
+		log.Printf("[FlowPay] cobro %d sin configuración de recordatorios: %v", id, err)
+	}
 	return &dto, nil
+}
+
+// nextReminderAt canales con un recordatorio manual reciente y la hora desde la que se puede repetir.
+func (s *Service) nextReminderAt(ctx context.Context, chargeID int64, now time.Time) (map[string]time.Time, error) {
+	last, err := s.Repo.LastManualReminderByChannel(ctx, chargeID)
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]time.Time
+	for channel, at := range last {
+		until := at.Add(ReminderCooldown)
+		if until.After(now) {
+			if out == nil {
+				out = map[string]time.Time{}
+			}
+			out[channel] = until
+		}
+	}
+	return out, nil
 }
 
 type CreateChargeInput struct {
 	ClientID int64   `json:"client_id"`
 	Amount   float64 `json:"amount"`
 	DueDate  string  `json:"due_date"`
+	ChargeRemindersInput
 }
 
 func (s *Service) CreateCharge(ctx context.Context, companyID, memberUID int64, in CreateChargeInput) (int64, error) {
 	if in.ClientID == 0 || in.Amount <= 0 || in.DueDate == "" {
 		return 0, errors.New("payload de cobro inválido")
+	}
+	reminders, err := s.mergeChargeReminders(ctx, companyID, repository.ChargeReminderSettings{Mode: domain.ReminderModeCompany}, in.ChargeRemindersInput)
+	if err != nil {
+		return 0, err
 	}
 	due, err := time.ParseInLocation("2006-01-02", in.DueDate, time.Local)
 	if err != nil {
@@ -89,7 +163,19 @@ func (s *Service) CreateCharge(ctx context.Context, companyID, memberUID int64, 
 	if !ok {
 		return 0, errors.New("cliente no válido, inactivo o fuera de tu cartera")
 	}
-	return s.Repo.CreateCharge(ctx, companyID, in.ClientID, in.Amount, due)
+	id, err := s.Repo.CreateCharge(ctx, companyID, in.ClientID, in.Amount, due)
+	if err != nil {
+		return 0, err
+	}
+	if in.ChargeRemindersInput.any() {
+		if err := s.Repo.UpdateChargeReminderSettings(ctx, companyID, id, reminders); err != nil {
+			return 0, err
+		}
+	}
+	if _, err := s.Repo.EnsureClientPaymentToken(ctx, companyID, in.ClientID); err != nil {
+		log.Printf("[FlowPay] no se pudo asignar el enlace de pago a la sucursal: %v", err)
+	}
+	return id, nil
 }
 
 func (s *Service) DeleteCharge(ctx context.Context, companyID, chargeID int64) error {
@@ -127,57 +213,112 @@ func (s *Service) Dashboard(ctx context.Context, companyID, memberUID int64) (*D
 	}, nil
 }
 
-func (s *Service) SendReminderNow(ctx context.Context, companyID, chargeID, memberUID int64) error {
+// SendReminderNow envía un recordatorio manual por los canales pedidos ("email", "whatsapp").
+// Sin canales usa el canal preferido de la sucursal.
+func (s *Service) SendReminderNow(ctx context.Context, companyID, chargeID, memberUID int64, channels []string) error {
 	ch, err := s.Repo.GetCharge(ctx, companyID, chargeID, memberUID)
 	if err != nil {
 		return err
 	}
-	st := domain.ChargeStatus(ch.PaidAt, ch.DueDate, time.Now())
+	now := time.Now()
+	st := domain.ChargeStatus(ch.PaidAt, ch.DueDate, now)
 	if st == "paid" {
 		return errors.New("cobro ya cerrado")
 	}
 
-	channel := strings.TrimSpace(strings.ToLower(ch.ClientFollowupChannel))
-	if channel == "" {
-		channel = "all"
+	var sendEmail, sendWhatsApp bool
+	if len(channels) == 0 {
+		channel := strings.TrimSpace(strings.ToLower(ch.ClientFollowupChannel))
+		if set, err := s.Repo.GetChargeReminderSettings(ctx, chargeID); err == nil && set.Channel != "" {
+			channel = set.Channel
+		}
+		if channel == "" {
+			channel = "all"
+		}
+		if channel == "none" {
+			return errors.New("cliente con seguimiento desactivado (none)")
+		}
+		sendEmail = channel == "all" || channel == "email"
+		sendWhatsApp = channel == "all" || channel == "whatsapp"
+	} else {
+		for _, c := range channels {
+			switch strings.TrimSpace(strings.ToLower(c)) {
+			case "email":
+				sendEmail = true
+			case "whatsapp":
+				sendWhatsApp = true
+			default:
+				return ErrReminderBadChannel
+			}
+		}
 	}
-	if channel == "none" {
-		return errors.New("cliente con seguimiento desactivado (none)")
+	if !sendEmail && !sendWhatsApp {
+		return ErrReminderNoChannel
+	}
+	if sendEmail && (ch.ClientEmail == nil || strings.TrimSpace(*ch.ClientEmail) == "") {
+		return ErrReminderNoEmail
+	}
+	if sendWhatsApp && (ch.ClientPhone == nil || strings.TrimSpace(*ch.ClientPhone) == "") {
+		return ErrReminderNoPhone
+	}
+
+	waiting, err := s.nextReminderAt(ctx, chargeID, now)
+	if err != nil {
+		return err
+	}
+	if until, ok := waiting["whatsapp"]; ok && sendWhatsApp {
+		return &ReminderCooldownError{Channel: "whatsapp", Until: until}
+	}
+	if until, ok := waiting["email"]; ok && sendEmail {
+		return &ReminderCooldownError{Channel: "email", Until: until}
 	}
 
 	priorOverdue, _ := s.Repo.CountRemindersByKind(ctx, chargeID, "overdue")
-	now := time.Now()
 	phase, daysU := remindercontent.PhaseFromCharge(*ch, now, priorOverdue)
-	subj, textBody, whatsAppMessage, resErr := remindercontent.ResolveReminder(ctx, s.Repo, companyID, phase, daysU, priorOverdue, *ch)
+	subj, textBody, _, payURL, resErr := remindercontent.ResolveReminder(ctx, s.Repo, companyID, phase, daysU, priorOverdue, *ch, s.AppPublicURL)
 	if resErr != nil {
 		subj, textBody = manualReminderTemplate(*ch, priorOverdue, now)
-		whatsAppMessage = textBody
 	}
+	whatsAppMessage, _ := notify.BuildWhatsAppTemplate(phase, *ch, payURL, notify.TemplateSIDs{})
 	emailMessage := fmt.Sprintf("Asunto: %s\n\n%s", subj, textBody)
 
-	sendEmail := channel == "all" || channel == "email"
-	sendWhatsApp := channel == "all" || channel == "whatsapp"
-
-	if s.Notify != nil {
-		switch {
-		case sendEmail && sendWhatsApp:
-			s.Notify.SendReminderEmail(*ch, subj, textBody)
-			s.Notify.SendReminderWhatsApp(*ch, textBody)
-		case sendEmail:
-			s.Notify.SendReminderEmail(*ch, subj, textBody)
-		case sendWhatsApp:
-			s.Notify.SendReminderWhatsApp(*ch, textBody)
+	if sendEmail && s.Notify != nil {
+		if err := s.Notify.SendReminderEmailFrom(*ch, subj, textBody, s.CompanySMTP(ctx, companyID)); err != nil {
+			return err
 		}
 	}
-
 	if sendEmail {
 		if _, err := s.Repo.InsertReminder(ctx, chargeID, "manual", "email", "sent", emailMessage, &now); err != nil {
 			return err
 		}
 	}
 	if sendWhatsApp {
-		if _, err := s.Repo.InsertReminder(ctx, chargeID, "manual", "whatsapp", "sent", whatsAppMessage, &now); err != nil {
+		var delivery notify.SentWhatsApp
+		if s.Notify != nil {
+			from, ferr := s.Repo.FirstActiveWhatsAppToForCompany(ctx, companyID)
+			if ferr != nil && !errors.Is(ferr, sql.ErrNoRows) {
+				return ferr
+			}
+			if ferr != nil {
+				from = ""
+			}
+			preview, sent, err := s.Notify.SendCompanyWhatsAppTemplate(*ch, from, phase, payURL)
+			if err != nil {
+				return err
+			}
+			if preview != "" {
+				whatsAppMessage.Preview = preview
+			}
+			delivery = sent
+		}
+		id, err := s.Repo.InsertReminder(ctx, chargeID, "manual", "whatsapp", "sent", whatsAppMessage.Preview, &now)
+		if err != nil {
 			return err
+		}
+		if delivery.SID != "" {
+			if err := s.Repo.SetReminderDelivery(ctx, id, delivery.SID, delivery.Status); err != nil {
+				log.Printf("[FlowPay WhatsApp] recordatorio %d sin seguimiento de entrega: %v", id, err)
+			}
 		}
 	}
 	return nil
@@ -185,9 +326,46 @@ func (s *Service) SendReminderNow(ctx context.Context, companyID, chargeID, memb
 
 // MessagingSettingsResponse plantillas + textos globales para recordatorios.
 type MessagingSettingsResponse struct {
-	TransferInstructions string                        `json:"transfer_instructions"`
-	PaymentURLTemplate    string                        `json:"payment_url_template"`
-	Templates             []repository.ReminderTemplateRow `json:"templates"`
+	TransferInstructions string                           `json:"transfer_instructions"`
+	PaymentURLTemplate   string                           `json:"payment_url_template"`
+	Templates            []repository.ReminderTemplateRow `json:"templates"`
+	ReminderPolicy       domain.ReminderPolicy            `json:"reminder_policy"`
+	// SendTime hora diaria (HH:MM, hora de Chile por defecto) del ciclo de recordatorios automáticos.
+	SendTime string `json:"send_time"`
+	// Defaults lo que recibe el cliente en cada fase con un cobro de ejemplo: la plantilla de WhatsApp
+	// aprobada (no editable) y el correo del sistema que se usa si la empresa no escribe el suyo.
+	Defaults map[string]MessagingPhaseDefaults `json:"defaults"`
+}
+
+type MessagingPhaseDefaults struct {
+	WhatsApp     string `json:"whatsapp"`
+	EmailSubject string `json:"email_subject"`
+	EmailBody    string `json:"email_body"`
+}
+
+func (s *Service) messagingDefaults() map[string]MessagingPhaseDefaults {
+	today := dateOnly(time.Now())
+	payURL := strings.TrimRight(strings.TrimSpace(s.AppPublicURL), "/") + "/pay/ejemplo"
+	if strings.TrimSpace(s.AppPublicURL) == "" {
+		payURL = "https://geldflus.com/pay/ejemplo"
+	}
+	phases := []struct {
+		phase string
+		due   time.Time
+	}{
+		{remindercontent.PhaseApproaching, today.AddDate(0, 0, 3)},
+		{remindercontent.PhaseDueToday, today},
+		{remindercontent.PhaseOverdueFirst, today.AddDate(0, 0, -2)},
+		{remindercontent.PhaseOverdueFollowUp, today.AddDate(0, 0, -8)},
+	}
+	out := make(map[string]MessagingPhaseDefaults, len(phases))
+	for _, p := range phases {
+		sample := repository.Charge{Amount: 150000, DueDate: p.due, ClientName: "Sucursal Centro"}
+		wa, _ := notify.BuildWhatsAppTemplate(p.phase, sample, payURL, notify.TemplateSIDs{})
+		subject, body := remindercontent.DefaultEmail(p.phase, sample, payURL)
+		out[p.phase] = MessagingPhaseDefaults{WhatsApp: wa.Preview, EmailSubject: subject, EmailBody: body}
+	}
+	return out
 }
 
 // MessagingTemplateInput fila de plantilla desde el panel.
@@ -206,6 +384,8 @@ type SaveMessagingInput struct {
 	TransferInstructions string                   `json:"transfer_instructions"`
 	PaymentURLTemplate   string                   `json:"payment_url_template"`
 	Templates            []MessagingTemplateInput `json:"templates"`
+	// ReminderPolicy nula deja la frecuencia como está.
+	ReminderPolicy *domain.ReminderPolicy `json:"reminder_policy"`
 }
 
 func (s *Service) GetCompanyMessagingSettings(ctx context.Context, companyID int64) (*MessagingSettingsResponse, error) {
@@ -217,10 +397,17 @@ func (s *Service) GetCompanyMessagingSettings(ctx context.Context, companyID int
 	if err != nil {
 		tpl = nil
 	}
+	policy, err := s.Repo.GetCompanyReminderPolicy(ctx, companyID)
+	if err != nil {
+		return nil, err
+	}
 	return &MessagingSettingsResponse{
 		TransferInstructions: cm.TransferInstructions,
 		PaymentURLTemplate:   cm.PaymentURLTemplate,
 		Templates:            tpl,
+		ReminderPolicy:       policy,
+		SendTime:             s.ReminderSendTime,
+		Defaults:             s.messagingDefaults(),
 	}, nil
 }
 
@@ -243,8 +430,21 @@ func (s *Service) SaveCompanyMessagingSettings(ctx context.Context, companyID in
 			return errors.New("En plantillas approaching, day_min no puede ser mayor que day_max")
 		}
 	}
+	var policy domain.ReminderPolicy
+	if in.ReminderPolicy != nil {
+		p, err := in.ReminderPolicy.Normalized()
+		if err != nil {
+			return err
+		}
+		policy = p
+	}
 	if err := s.Repo.UpdateCompanyMessaging(ctx, companyID, in.TransferInstructions, in.PaymentURLTemplate); err != nil {
 		return err
+	}
+	if in.ReminderPolicy != nil {
+		if err := s.Repo.UpdateCompanyReminderPolicy(ctx, companyID, policy); err != nil {
+			return err
+		}
 	}
 	rows := make([]repository.ReminderTemplateRow, 0, len(in.Templates))
 	for _, t := range in.Templates {
@@ -291,6 +491,97 @@ func (s *Service) ListReminders(ctx context.Context, companyID, chargeID, member
 		return nil, err
 	}
 	return s.Repo.ListReminders(ctx, chargeID)
+}
+
+var (
+	// ErrWhatsAppReplyWindow el cliente no escribió en las últimas 24 horas.
+	ErrWhatsAppReplyWindow = errors.New("pasaron más de 24 horas desde el último mensaje del cliente. Usa Enviar recordatorio ahora")
+	// ErrWhatsAppReplyPhone el cobro no tiene teléfono.
+	ErrWhatsAppReplyPhone = errors.New("este cobro no tiene teléfono de WhatsApp")
+	// ErrWhatsAppReplyEmpty el texto viene vacío.
+	ErrWhatsAppReplyEmpty = errors.New("escribe un mensaje")
+	// ErrWhatsAppReplyLong el texto supera el límite.
+	ErrWhatsAppReplyLong = errors.New("el mensaje puede tener hasta 1000 caracteres")
+)
+
+// prepareWhatsAppReply valida que se pueda escribirle al cliente del cobro y resuelve el número que envía.
+// WhatsApp solo permite mensajes libres durante las 24 horas siguientes al último mensaje del cliente.
+func (s *Service) prepareWhatsAppReply(ctx context.Context, companyID, chargeID, memberUID int64) (*repository.Charge, string, error) {
+	ch, err := s.Repo.GetCharge(ctx, companyID, chargeID, memberUID)
+	if err != nil {
+		return nil, "", err
+	}
+	if ch.ClientPhone == nil || strings.TrimSpace(*ch.ClientPhone) == "" {
+		return nil, "", ErrWhatsAppReplyPhone
+	}
+	if s.Notify == nil {
+		return nil, "", errors.New("WhatsApp no está configurado")
+	}
+	since := time.Now().Add(-24 * time.Hour)
+	open, err := s.Repo.HasInboundFromPhoneSince(ctx, companyID, *ch.ClientPhone, since)
+	if err != nil {
+		return nil, "", err
+	}
+	if !open {
+		return nil, "", ErrWhatsAppReplyWindow
+	}
+	from := ""
+	if tn, ferr := s.Repo.FirstActiveWhatsAppToForCompany(ctx, companyID); ferr == nil {
+		from = strings.TrimSpace(tn)
+	} else if !errors.Is(ferr, sql.ErrNoRows) {
+		return nil, "", ferr
+	}
+	return ch, from, nil
+}
+
+// ReplyChargeWhatsApp envía un texto libre al cliente si escribió en las últimas 24 horas.
+func (s *Service) ReplyChargeWhatsApp(ctx context.Context, companyID, chargeID, memberUID int64, text string) (*model.Message, error) {
+	msg := strings.TrimSpace(text)
+	if msg == "" {
+		return nil, ErrWhatsAppReplyEmpty
+	}
+	if len([]rune(msg)) > 1000 {
+		return nil, ErrWhatsAppReplyLong
+	}
+	ch, from, err := s.prepareWhatsAppReply(ctx, companyID, chargeID, memberUID)
+	if err != nil {
+		return nil, err
+	}
+	sent, err := s.Notify.SendCompanyWhatsAppText(*ch, msg, from)
+	if err != nil {
+		return nil, err
+	}
+	return s.saveOutboundMessage(ctx, companyID, chargeID, from, *ch.ClientPhone, msg, nil, sent)
+}
+
+func (s *Service) saveOutboundMessage(ctx context.Context, companyID, chargeID int64, from, clientPhone, msg string, media []model.MessageMedia, sent notify.SentWhatsApp) (*model.Message, error) {
+	to := notify.NormalizeWhatsAppForTwilio(clientPhone)
+	cid := chargeID
+	status := sent.Status
+	if status == "" {
+		status = "sent"
+	}
+	saved := &model.Message{
+		CompanyID:   companyID,
+		ChargeID:    &cid,
+		FromNumber:  from,
+		ToNumber:    to,
+		Content:     msg,
+		Media:       media,
+		Direction:   "outbound",
+		Status:      status,
+		ProviderSID: sent.SID,
+	}
+	id, err := s.Repo.InsertMessage(ctx, saved)
+	if err != nil {
+		log.Printf("[FlowPay WhatsApp] respuesta enviada pero no se guardó charge=%d: %v", chargeID, err)
+		return saved, nil
+	}
+	got, err := s.Repo.GetMessageByID(ctx, companyID, id)
+	if err != nil {
+		return saved, nil
+	}
+	return got, nil
 }
 
 // ListChargeInboundWhatsApp respuestas del cliente (WhatsApp entrante) vinculadas al cobro.
@@ -345,10 +636,11 @@ type PatchChargeInput struct {
 	DueDate  *string  `json:"due_date"`
 	Amount   *float64 `json:"amount"`
 	SetPaid  *bool    `json:"set_paid"`
+	ChargeRemindersInput
 }
 
 func (s *Service) PatchCharge(ctx context.Context, companyID, chargeID, memberUID int64, in PatchChargeInput) error {
-	has := in.ClientID != nil || in.DueDate != nil || in.Amount != nil || in.SetPaid != nil
+	has := in.ClientID != nil || in.DueDate != nil || in.Amount != nil || in.SetPaid != nil || in.ChargeRemindersInput.any()
 	if !has {
 		return errors.New("nada que actualizar")
 	}
@@ -376,8 +668,26 @@ func (s *Service) PatchCharge(ctx context.Context, companyID, chargeID, memberUI
 		duePtr = &t
 	}
 
+	var reminders *repository.ChargeReminderSettings
+	if in.ChargeRemindersInput.any() {
+		cur, err := s.Repo.GetChargeReminderSettings(ctx, chargeID)
+		if err != nil {
+			return err
+		}
+		next, err := s.mergeChargeReminders(ctx, companyID, cur, in.ChargeRemindersInput)
+		if err != nil {
+			return err
+		}
+		reminders = &next
+	}
+
 	if err := s.Repo.UpdateChargeFields(ctx, companyID, chargeID, in.ClientID, duePtr, in.Amount); err != nil {
 		return err
+	}
+	if reminders != nil {
+		if err := s.Repo.UpdateChargeReminderSettings(ctx, companyID, chargeID, *reminders); err != nil {
+			return err
+		}
 	}
 
 	if in.SetPaid == nil {

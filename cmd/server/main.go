@@ -47,29 +47,52 @@ func main() {
 	if err := repo.EnsureReminderTemplateColumns(context.Background()); err != nil {
 		log.Printf("warn: columnas de plantillas de recordatorio: %v", err)
 	}
+	if err := repo.EnsureWhatsAppSchema(context.Background()); err != nil {
+		log.Printf("warn: tablas de WhatsApp: %v", err)
+	}
+	if err := repo.EnsureDeliverySchema(context.Background()); err != nil {
+		log.Printf("warn: estado de entrega de WhatsApp: %v", err)
+	}
+	if err := repo.EnsureMailboxSchema(context.Background()); err != nil {
+		log.Printf("warn: buzones de correo: %v", err)
+	}
+	if err := repo.EnsureJobRunsSchema(context.Background()); err != nil {
+		log.Printf("warn: registro de tareas programadas: %v", err)
+	}
+	if err := repo.EnsureReminderPolicySchema(context.Background()); err != nil {
+		log.Printf("warn: frecuencia de recordatorios: %v", err)
+	}
 	if err := os.MkdirAll(filepath.Clean(cfg.UploadDir), 0o755); err != nil {
 		log.Fatal("upload dir:", err)
 	}
+	reminderSchedule := jobs.Schedule{Hour: cfg.ReminderHour, Minute: cfg.ReminderMinute, Location: cfg.ReminderLocation}
 	svc := &service.Service{
-		Repo:      repo,
-		Notify:    cfg.Notify,
-		UploadDir: cfg.UploadDir,
+		Repo:             repo,
+		Notify:           cfg.Notify,
+		UploadDir:        cfg.UploadDir,
+		AppPublicURL:     cfg.AppPublicURL,
+		ReminderSendTime: reminderSchedule.Clock(),
 	}
-	wa := &service.WhatsAppService{Repo: repo}
+	wa := &service.WhatsAppService{Repo: repo, AccountSID: cfg.TwilioAccountSID, AuthToken: cfg.TwilioAuthToken}
 	deps := controller.Deps{
 		Svc:      svc,
 		WhatsApp: wa,
 		TwilioWebhook: controller.TwilioWebhookDeps{
 			AuthToken:               cfg.TwilioAuthToken,
 			ValidateTwilioSignature: cfg.TwilioValidateWebhook,
+			PublicBaseURLs:          []string{cfg.PublicBaseURL, cfg.AppPublicURL},
 		},
 		DefaultCompany: cfg.DefaultCompanyID,
 		JWTSecret:      cfg.JWTSecret,
 	}
 
 	r := gin.Default()
+	r.Use(func(c *gin.Context) {
+		c.Header("Cache-Control", "no-store")
+		c.Next()
+	})
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{"http://localhost:5173", "http://127.0.0.1:5173"},
+		AllowOriginFunc:  allowBrowserOrigin,
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Authorization"},
 		ExposeHeaders:    []string{"Content-Length"},
@@ -81,11 +104,11 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	jobs.StartReminderJob(ctx, repo, cfg.Notify, cfg.ReminderInterval)
+	jobs.StartReminderJob(ctx, repo, cfg.Notify, reminderSchedule, cfg.AppPublicURL)
 
 	srv := &http.Server{Addr: cfg.Addr, Handler: r}
 	go func() {
-		printStartupStatus(db, cfg.Addr, cfg.DSN, cfg.ReminderInterval, cfg.JWTSecret, cfg.PublicBaseURL)
+		printStartupStatus(db, cfg.Addr, cfg.DSN, reminderSchedule.String(), cfg.JWTSecret, cfg.PublicBaseURL)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal(err)
 		}
@@ -99,7 +122,7 @@ func main() {
 	log.Println("servidor detenido")
 }
 
-func printStartupStatus(db *sql.DB, addr, dsn string, reminderInterval time.Duration, jwtSecret, publicBase string) {
+func printStartupStatus(db *sql.DB, addr, dsn, reminderSchedule, jwtSecret, publicBase string) {
 	const (
 		reset  = "\033[0m"
 		bold   = "\033[1m"
@@ -123,7 +146,7 @@ func printStartupStatus(db *sql.DB, addr, dsn string, reminderInterval time.Dura
 	log.Printf(cyan+"║"+reset+" %s", ok("DB destino: "+safeDSN(dsn)))
 	log.Printf(cyan+"║"+reset+" %s", ok("HTTP listening en "+addr))
 	log.Printf(cyan+"║"+reset+" %s", ok("Healthcheck: GET "+addr+"/health"))
-	log.Printf(cyan+"║"+reset+" %s", ok("Reminder job activo ("+reminderInterval.String()+")"))
+	log.Printf(cyan+"║"+reset+" %s", ok("Recordatorios automáticos: "+reminderSchedule))
 	log.Printf(cyan+"║"+reset+" %s", ok("Pagos/Webpay: flowpay-payments (repo aparte)"))
 
 	if strings.TrimSpace(jwtSecret) == "" {
@@ -154,6 +177,31 @@ func printStartupStatus(db *sql.DB, addr, dsn string, reminderInterval time.Dura
 
 	log.Printf(cyan+"║"+reset+" %s", fmt.Sprintf("%sAPI base: /api/*%s", bold, reset))
 	log.Println(cyan + "╚══════════════════════════════════════════════════════╝" + reset)
+}
+
+func allowBrowserOrigin(origin string) bool {
+	switch origin {
+	case "https://geldflus.com", "https://www.geldflus.com":
+		return true
+	}
+	if isLocalDevOrigin(origin) {
+		return true
+	}
+	for _, extra := range strings.Split(os.Getenv("FLOWPAY_CORS_ORIGINS"), ",") {
+		if strings.TrimSpace(extra) == origin && origin != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func isLocalDevOrigin(origin string) bool {
+	u, err := url.Parse(origin)
+	if err != nil || u.Scheme != "http" {
+		return false
+	}
+	host := u.Hostname()
+	return host == "localhost" || host == "127.0.0.1"
 }
 
 func safeDSN(raw string) string {
