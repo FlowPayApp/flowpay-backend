@@ -183,7 +183,7 @@ func printStartupStatus(db *sql.DB, addr, dsn, reminderSchedule, jwtSecret, publ
 
 func allowBrowserOrigin(origin string) bool {
 	switch origin {
-	case "https://geldflus.com", "https://www.geldflus.com":
+	case "https://geldflus.com", "https://www.geldflus.com", "https://app.geldflus.com":
 		return true
 	}
 	if isLocalDevOrigin(origin) {
