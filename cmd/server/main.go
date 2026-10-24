@@ -99,7 +99,7 @@ func main() {
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
 	}))
-	routes.Register(r, deps, middleware.BearerJWT(cfg.JWTSecret))
+	routes.Register(r, deps, middleware.BearerJWT(cfg.JWTSecret), cfg.AllowWhatsAppSimulate)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

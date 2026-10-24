@@ -25,6 +25,7 @@ type Config struct {
 	TwilioAccountSID      string
 	TwilioAuthToken       string
 	TwilioValidateWebhook bool
+	AllowWhatsAppSimulate bool
 }
 
 func envBool(key string) bool {
@@ -90,6 +91,7 @@ func Load() Config {
 		TwilioAccountSID:      strings.TrimSpace(os.Getenv("FLOWPAY_TWILIO_ACCOUNT_SID")),
 		TwilioAuthToken:       strings.TrimSpace(os.Getenv("FLOWPAY_TWILIO_AUTH_TOKEN")),
 		TwilioValidateWebhook: envBool("FLOWPAY_TWILIO_VALIDATE_WEBHOOK"),
+		AllowWhatsAppSimulate: envBool("FLOWPAY_WHATSAPP_SIMULATE"),
 	}
 }
 

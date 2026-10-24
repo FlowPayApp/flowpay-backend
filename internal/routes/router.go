@@ -7,7 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func Register(r *gin.Engine, deps controller.Deps, jwtMiddleware gin.HandlerFunc) {
+func Register(r *gin.Engine, deps controller.Deps, jwtMiddleware gin.HandlerFunc, allowWhatsAppSimulate bool) {
 	r.GET("/api/public/attachments/:token", deps.PublicAttachment)
 	r.GET("/api/public/chat-files/:token/:name", deps.PublicChatFile)
 	r.POST("/api/webhooks/twilio/whatsapp", deps.TwilioWhatsAppWebhook)
@@ -28,7 +28,9 @@ func Register(r *gin.Engine, deps controller.Deps, jwtMiddleware gin.HandlerFunc
 		api.POST("/charges/:id/whatsapp/file", deps.SendChargeWhatsAppFile)
 		api.POST("/charges/:id/read", deps.MarkChargeRead)
 		api.GET("/inbox", deps.Inbox)
-		api.POST("/charges/:id/inbound-whatsapp/simulate", deps.SimulateChargeInboundWhatsApp)
+		if allowWhatsAppSimulate {
+			api.POST("/charges/:id/inbound-whatsapp/simulate", deps.SimulateChargeInboundWhatsApp)
+		}
 		api.POST("/charges/:id/reminders", deps.SendReminder)
 		api.POST("/charges/:id/attachment", deps.UploadChargeAttachment)
 		api.GET("/dashboard", deps.Dashboard)
