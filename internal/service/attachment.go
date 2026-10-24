@@ -20,6 +20,15 @@ var allowedAttachmentExt = map[string]string{
 	".png":  "image/png",
 	".jpg":  "image/jpeg",
 	".jpeg": "image/jpeg",
+	".webp": "image/webp",
+	".gif":  "image/gif",
+	".heic": "image/heic",
+	".heif": "image/heif",
+	".xls":  "application/vnd.ms-excel",
+	".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+	".csv":  "text/csv; charset=utf-8",
+	".doc":  "application/msword",
+	".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
 
 func extFromFilename(name string) (extNoDot string, dotExt string, ok bool) {
@@ -44,14 +53,14 @@ func mimeFromExt(extNoDot string) string {
 	return mime.TypeByExtension(d)
 }
 
-// SaveChargeAttachment guarda PDF/imagen y asocia el cobro.
+// SaveChargeAttachment guarda la factura (PDF, foto, Excel u otro documento) y la asocia al cobro.
 func (s *Service) SaveChargeAttachment(ctx context.Context, companyID, chargeID, memberUID int64, src io.Reader, origName string, size int64) error {
 	if s.UploadDir == "" {
 		return errors.New("upload dir not configured")
 	}
 	extNoDot, _, ok := extFromFilename(origName)
 	if !ok {
-		return errors.New("solo se permiten PDF, PNG o JPG")
+		return errors.New("solo se permiten PDF, fotos (JPG, PNG, WEBP), Excel (XLS, XLSX), Word o CSV")
 	}
 	if size > maxAttachmentBytes {
 		return errors.New("archivo demasiado grande (máx 8 MB)")
@@ -95,20 +104,20 @@ func (s *Service) SaveChargeAttachment(ctx context.Context, companyID, chargeID,
 }
 
 // OpenPublicAttachment abre el archivo público por token (para GET y para verificar que existe).
-func (s *Service) OpenPublicAttachment(ctx context.Context, token string) (*os.File, string, error) {
+func (s *Service) OpenPublicAttachment(ctx context.Context, token string) (*os.File, string, string, error) {
 	if token == "" {
-		return nil, "", errors.New("bad token")
+		return nil, "", "", errors.New("bad token")
 	}
 	ext, err := s.Repo.GetAttachmentExtByToken(ctx, token)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	path := filepath.Join(s.UploadDir, fmt.Sprintf("%s.%s", token, ext))
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
-	return f, mimeFromExt(ext), nil
+	return f, mimeFromExt(ext), ext, nil
 }
 
 func randomToken() (string, error) {

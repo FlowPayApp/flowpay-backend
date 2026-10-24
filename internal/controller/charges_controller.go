@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/flowpay/flowpay-backend/internal/service"
 	"github.com/gin-gonic/gin"
@@ -298,20 +299,17 @@ func (d *Deps) UploadChargeAttachment(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
-func publicAttachmentName(mimeType string) string {
-	switch mimeType {
-	case "image/png":
-		return "factura.png"
-	case "image/jpeg":
-		return "factura.jpg"
-	default:
+func publicAttachmentName(ext string) string {
+	ext = strings.ToLower(strings.TrimPrefix(strings.TrimSpace(ext), "."))
+	if ext == "" {
 		return "factura.pdf"
 	}
+	return "factura." + ext
 }
 
 func (d *Deps) PublicAttachment(c *gin.Context) {
 	token := c.Param("token")
-	f, mimeType, err := d.Svc.OpenPublicAttachment(c.Request.Context(), token)
+	f, mimeType, ext, err := d.Svc.OpenPublicAttachment(c.Request.Context(), token)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			c.Status(http.StatusNotFound)
@@ -326,7 +324,7 @@ func (d *Deps) PublicAttachment(c *gin.Context) {
 		c.Status(http.StatusNotFound)
 		return
 	}
-	name := publicAttachmentName(mimeType)
+	name := publicAttachmentName(ext)
 	disposition := "inline"
 	if c.Query("download") == "1" {
 		disposition = "attachment"

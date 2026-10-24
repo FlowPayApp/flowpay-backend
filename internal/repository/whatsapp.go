@@ -303,17 +303,16 @@ WHERE token = $1 AND created_at > NOW() - make_interval(secs => $2)
 	return &f, nil
 }
 
-// FindOpenChargeIDForInboundWhatsApp elige un cobro pendiente del cliente cuyo teléfono coincide con from (Twilio).
-// Prioriza el cobro creado más recientemente.
+// FindOpenChargeIDForInboundWhatsApp elige el cobro del cliente cuyo teléfono coincide con from (Twilio).
+// Prefiere uno todavía por cobrar; si ya pagó, usa el más reciente para que la conversación siga en esa ficha.
 func (db *DB) FindOpenChargeIDForInboundWhatsApp(ctx context.Context, companyID int64, fromNormalized string) (*int64, error) {
 	q := `
 SELECT ch.id, COALESCE(c.phone, '') AS phone
 FROM charges ch
 JOIN clients c ON c.id = ch.client_id
 WHERE ch.company_id = $1
-  AND ch.paid_at IS NULL
   AND c.phone IS NOT NULL AND TRIM(c.phone) <> ''
-ORDER BY ch.created_at DESC, ch.id DESC
+ORDER BY (ch.paid_at IS NULL) DESC, ch.created_at DESC, ch.id DESC
 `
 	rows, err := db.db.QueryContext(ctx, q, companyID)
 	if err != nil {

@@ -34,8 +34,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	db.SetMaxOpenConns(10)
-	db.SetConnMaxLifetime(time.Minute * 3)
+	db.SetMaxOpenConns(4)
+	db.SetMaxIdleConns(2)
+	db.SetConnMaxIdleTime(time.Minute)
+	db.SetConnMaxLifetime(3 * time.Minute)
 	if err := db.Ping(); err != nil {
 		log.Fatal("postgres ping:", err)
 	}

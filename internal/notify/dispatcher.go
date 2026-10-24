@@ -41,6 +41,15 @@ func NewDispatcher(opt Options) *Dispatcher {
 	return d
 }
 
+func whatsAppAcceptsAttachment(ext string) bool {
+	switch strings.ToLower(strings.TrimPrefix(ext, ".")) {
+	case "pdf", "png", "jpg", "jpeg", "webp", "xls", "xlsx", "doc", "docx":
+		return true
+	default:
+		return false
+	}
+}
+
 func (d *Dispatcher) whatsAppMediaURLs(ch repository.Charge) []string {
 	if d.publicBaseURL == "" {
 		return nil
@@ -48,8 +57,18 @@ func (d *Dispatcher) whatsAppMediaURLs(ch repository.Charge) []string {
 	if ch.AttachmentToken == nil || ch.AttachmentExt == nil || *ch.AttachmentToken == "" || *ch.AttachmentExt == "" {
 		return nil
 	}
+	if !whatsAppAcceptsAttachment(*ch.AttachmentExt) {
+		return nil
+	}
 	u := d.publicBaseURL + "/api/public/attachments/" + *ch.AttachmentToken
 	return []string{u}
+}
+
+func (d *Dispatcher) reminderMedia(ch repository.Charge) []string {
+	if d.publicBaseURL == "" && ch.AttachmentToken != nil && *ch.AttachmentToken != "" {
+		log.Printf("[FlowPay] Hay adjunto en cobro #%d pero FLOWPAY_PUBLIC_BASE_URL no está definido: WhatsApp irá sin archivo", ch.ID)
+	}
+	return d.whatsAppMediaURLs(ch)
 }
 
 func (d *Dispatcher) resolveEmail(client *string) string {
@@ -135,11 +154,7 @@ func (d *Dispatcher) PublicBaseURL() string {
 
 // SendCompanyWhatsApp envía desde el WhatsApp Business de la empresa (from vacío cae al número global).
 func (d *Dispatcher) SendCompanyWhatsApp(ch repository.Charge, body, from string) error {
-	media := d.whatsAppMediaURLs(ch)
-	if len(media) == 0 && ch.AttachmentToken != nil && *ch.AttachmentToken != "" {
-		log.Printf("[FlowPay] Hay adjunto en cobro #%d pero FLOWPAY_PUBLIC_BASE_URL no está definido: WhatsApp irá sin archivo", ch.ID)
-	}
-	_, err := d.sendWhatsAppFrom(from, d.resolveWhatsApp(ch.ClientPhone), body, media)
+	_, err := d.sendWhatsAppFrom(from, d.resolveWhatsApp(ch.ClientPhone), body, d.reminderMedia(ch))
 	return err
 }
 
@@ -147,12 +162,8 @@ func (d *Dispatcher) SendCompanyWhatsApp(ch repository.Charge, body, from string
 func (d *Dispatcher) SendApproaching(ch repository.Charge) {
 	body := BodyApproaching(ch)
 	subj := "Recordatorio: cobro próximo a vencer"
-	media := d.whatsAppMediaURLs(ch)
-	if len(media) == 0 && ch.AttachmentToken != nil && *ch.AttachmentToken != "" {
-		log.Printf("[FlowPay] Hay adjunto en cobro #%d pero FLOWPAY_PUBLIC_BASE_URL no está definido: WhatsApp irá sin archivo", ch.ID)
-	}
 	d.sendEmail(d.resolveEmail(ch.ClientEmail), subj, body)
-	d.sendWhatsApp(d.resolveWhatsApp(ch.ClientPhone), body, media)
+	d.sendWhatsApp(d.resolveWhatsApp(ch.ClientPhone), body, d.reminderMedia(ch))
 }
 
 func (d *Dispatcher) SendApproachingEmail(ch repository.Charge) {
@@ -172,12 +183,8 @@ func (d *Dispatcher) SendApproachingSMS(ch repository.Charge) {
 func (d *Dispatcher) SendDueToday(ch repository.Charge) {
 	body := BodyDueToday(ch)
 	subj := "Hoy vence un cobro pendiente"
-	media := d.whatsAppMediaURLs(ch)
-	if len(media) == 0 && ch.AttachmentToken != nil && *ch.AttachmentToken != "" {
-		log.Printf("[FlowPay] Hay adjunto en cobro #%d pero FLOWPAY_PUBLIC_BASE_URL no está definido: WhatsApp irá sin archivo", ch.ID)
-	}
 	d.sendEmail(d.resolveEmail(ch.ClientEmail), subj, body)
-	d.sendWhatsApp(d.resolveWhatsApp(ch.ClientPhone), body, media)
+	d.sendWhatsApp(d.resolveWhatsApp(ch.ClientPhone), body, d.reminderMedia(ch))
 }
 
 func (d *Dispatcher) SendDueTodayEmail(ch repository.Charge) {
@@ -197,12 +204,8 @@ func (d *Dispatcher) SendDueTodaySMS(ch repository.Charge) {
 func (d *Dispatcher) SendOverdueFirst(ch repository.Charge) {
 	body := BodyOverdueFirst(ch)
 	subj := "Cobro vencido — acción requerida"
-	media := d.whatsAppMediaURLs(ch)
-	if len(media) == 0 && ch.AttachmentToken != nil && *ch.AttachmentToken != "" {
-		log.Printf("[FlowPay] Hay adjunto en cobro #%d pero FLOWPAY_PUBLIC_BASE_URL no está definido: WhatsApp irá sin archivo", ch.ID)
-	}
 	d.sendEmail(d.resolveEmail(ch.ClientEmail), subj, body)
-	d.sendWhatsApp(d.resolveWhatsApp(ch.ClientPhone), body, media)
+	d.sendWhatsApp(d.resolveWhatsApp(ch.ClientPhone), body, d.reminderMedia(ch))
 }
 
 func (d *Dispatcher) SendOverdueFirstEmail(ch repository.Charge) {
@@ -222,12 +225,8 @@ func (d *Dispatcher) SendOverdueFirstSMS(ch repository.Charge) {
 func (d *Dispatcher) SendOverdueFollowUp(ch repository.Charge) {
 	body := BodyOverdueFollowUp(ch)
 	subj := "Seguimiento de cobro pendiente"
-	media := d.whatsAppMediaURLs(ch)
-	if len(media) == 0 && ch.AttachmentToken != nil && *ch.AttachmentToken != "" {
-		log.Printf("[FlowPay] Hay adjunto en cobro #%d pero FLOWPAY_PUBLIC_BASE_URL no está definido: WhatsApp irá sin archivo", ch.ID)
-	}
 	d.sendEmail(d.resolveEmail(ch.ClientEmail), subj, body)
-	d.sendWhatsApp(d.resolveWhatsApp(ch.ClientPhone), body, media)
+	d.sendWhatsApp(d.resolveWhatsApp(ch.ClientPhone), body, d.reminderMedia(ch))
 }
 
 func (d *Dispatcher) SendOverdueFollowUpEmail(ch repository.Charge) {
@@ -265,10 +264,6 @@ func (d *Dispatcher) SendManual(ch repository.Charge, priorOverdueReminders int,
 			subj = "Seguimiento de cobro pendiente"
 		}
 	}
-	media := d.whatsAppMediaURLs(ch)
-	if len(media) == 0 && ch.AttachmentToken != nil && *ch.AttachmentToken != "" {
-		log.Printf("[FlowPay] Hay adjunto en cobro #%d pero FLOWPAY_PUBLIC_BASE_URL no está definido: WhatsApp irá sin archivo", ch.ID)
-	}
 	d.sendEmail(d.resolveEmail(ch.ClientEmail), subj, body)
-	d.sendWhatsApp(d.resolveWhatsApp(ch.ClientPhone), body, media)
+	d.sendWhatsApp(d.resolveWhatsApp(ch.ClientPhone), body, d.reminderMedia(ch))
 }
