@@ -100,11 +100,13 @@ func runAllCompanies(repo *repository.DB, d *notify.Dispatcher, appPublicURL str
 
 // sender lo que comparten los envíos de una empresa en un ciclo.
 type sender struct {
-	repo         *repository.DB
-	d            *notify.Dispatcher
-	mailbox      *notify.SMTPConfig
-	waFrom       string
-	appPublicURL string
+	repo          *repository.DB
+	d             *notify.Dispatcher
+	mailbox       *notify.SMTPConfig
+	waFrom        string
+	allowEmail    bool
+	allowWhatsApp bool
+	appPublicURL  string
 }
 
 // runOnce avisa a cada cobro sin pagar según su frecuencia (la propia o la de la empresa).
@@ -118,7 +120,16 @@ func runOnce(ctx context.Context, repo *repository.DB, d *notify.Dispatcher, com
 	if waErr != nil {
 		waFrom = ""
 	}
-	s := sender{repo: repo, d: d, mailbox: companyMailbox(ctx, repo, companyID), waFrom: waFrom, appPublicURL: appPublicURL}
+	allowEmail, allowWhatsApp := true, true
+	if emailOn, whatsAppOn, accessErr := repo.CompanyNotifyAccess(ctx, companyID); accessErr != nil {
+		log.Println("[FlowPay Job] medios de aviso:", accessErr)
+	} else {
+		allowEmail, allowWhatsApp = emailOn, whatsAppOn
+	}
+	s := sender{
+		repo: repo, d: d, mailbox: companyMailbox(ctx, repo, companyID), waFrom: waFrom,
+		allowEmail: allowEmail, allowWhatsApp: allowWhatsApp, appPublicURL: appPublicURL,
+	}
 
 	companyPolicy, err := repo.GetCompanyReminderPolicy(ctx, companyID)
 	if err != nil {
@@ -197,7 +208,7 @@ func runOnce(ctx context.Context, repo *repository.DB, d *notify.Dispatcher, com
 // send envía por los canales de channel y registra cada envío logrado.
 func (s sender) send(ctx context.Context, ch repository.Charge, channel, kind, phase, subject, body, payURL string) {
 	log.Println("[FlowPay Job]", subject)
-	if shouldSendEmail(channel) {
+	if shouldSendEmail(channel) && s.allowEmail && s.mailbox != nil {
 		if sendCompanyEmail(s.d, ch, subject, body, s.mailbox) {
 			emailMessage := fmt.Sprintf("Asunto: %s\n\n%s", subject, body)
 			if _, err := s.repo.InsertReminder(ctx, ch.ID, kind, "email", "sent", emailMessage, ptrNow()); err != nil {
@@ -205,7 +216,7 @@ func (s sender) send(ctx context.Context, ch repository.Charge, channel, kind, p
 			}
 		}
 	}
-	if shouldSendWhatsApp(channel) {
+	if shouldSendWhatsApp(channel) && s.allowWhatsApp && strings.TrimSpace(s.waFrom) != "" {
 		if preview, sent, ok := sendCompanyWhatsAppTemplate(s.d, ch, s.waFrom, phase, payURL); ok {
 			saveWhatsAppReminder(ctx, s.repo, ch.ID, kind, preview, sent)
 		}

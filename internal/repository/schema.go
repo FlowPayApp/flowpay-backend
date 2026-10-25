@@ -2,6 +2,21 @@ package repository
 
 import "context"
 
+// EnsureCompanyNotifyColumns guarda si la empresa puede avisar por correo y por WhatsApp.
+// El superadmin lo elige aparte del buzón y del número, que pueden seguir guardados.
+func (db *DB) EnsureCompanyNotifyColumns(ctx context.Context) error {
+	stmts := []string{
+		`ALTER TABLE companies ADD COLUMN IF NOT EXISTS allow_email BOOLEAN NOT NULL DEFAULT TRUE`,
+		`ALTER TABLE companies ADD COLUMN IF NOT EXISTS allow_whatsapp BOOLEAN NOT NULL DEFAULT TRUE`,
+	}
+	for _, q := range stmts {
+		if _, err := db.db.ExecContext(ctx, q); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // EnsureClientPortfolioColumns alinea columnas de cartera usadas para filtrar cobros.
 func (db *DB) EnsureClientPortfolioColumns(ctx context.Context) error {
 	stmts := []string{

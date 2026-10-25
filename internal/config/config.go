@@ -8,6 +8,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/flowpay/flowpay-backend/internal/notify"
+	"github.com/flowpay/flowpay-backend/internal/secretbox"
 )
 
 type Config struct {
@@ -25,6 +26,7 @@ type Config struct {
 	TwilioAccountSID      string
 	TwilioAuthToken       string
 	TwilioValidateWebhook bool
+	PaymentCredentialsKey []byte
 }
 
 func envBool(key string) bool {
@@ -90,7 +92,17 @@ func Load() Config {
 		TwilioAccountSID:      strings.TrimSpace(os.Getenv("FLOWPAY_TWILIO_ACCOUNT_SID")),
 		TwilioAuthToken:       strings.TrimSpace(os.Getenv("FLOWPAY_TWILIO_AUTH_TOKEN")),
 		TwilioValidateWebhook: envBool("FLOWPAY_TWILIO_VALIDATE_WEBHOOK"),
+		PaymentCredentialsKey: paymentCredentialsKey(),
 	}
+}
+
+func paymentCredentialsKey() []byte {
+	key, err := secretbox.KeyFromMaterial(os.Getenv("FLOWPAY_PAYMENT_CREDENTIALS_KEY"))
+	if err != nil {
+		log.Println("warn: FLOWPAY_PAYMENT_CREDENTIALS_KEY no está configurada; no se pueden guardar credenciales de pago")
+		return nil
+	}
+	return key
 }
 
 const defaultReminderTime = "10:00"

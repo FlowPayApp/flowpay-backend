@@ -43,6 +43,9 @@ func main() {
 	}
 
 	repo := repository.New(db)
+	if err := repo.EnsureCompanyNotifyColumns(context.Background()); err != nil {
+		log.Printf("warn: medios de aviso de la empresa: %v", err)
+	}
 	if err := repo.EnsureClientPortfolioColumns(context.Background()); err != nil {
 		log.Printf("warn: columnas de cartera de clientes: %v", err)
 	}
@@ -64,6 +67,9 @@ func main() {
 	if err := repo.EnsureReminderPolicySchema(context.Background()); err != nil {
 		log.Printf("warn: frecuencia de recordatorios: %v", err)
 	}
+	if err := repo.EnsurePaymentCredentialsSchema(context.Background()); err != nil {
+		log.Printf("warn: credenciales de pago: %v", err)
+	}
 	if err := os.MkdirAll(filepath.Clean(cfg.UploadDir), 0o755); err != nil {
 		log.Fatal("upload dir:", err)
 	}
@@ -74,6 +80,7 @@ func main() {
 		UploadDir:        cfg.UploadDir,
 		AppPublicURL:     cfg.AppPublicURL,
 		ReminderSendTime: reminderSchedule.Clock(),
+		PaymentKey:       cfg.PaymentCredentialsKey,
 	}
 	wa := &service.WhatsAppService{Repo: repo, AccountSID: cfg.TwilioAccountSID, AuthToken: cfg.TwilioAuthToken}
 	deps := controller.Deps{

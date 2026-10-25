@@ -7,9 +7,9 @@ import (
 
 // CompanyMessaging textos globales para armar recordatorios (placeholders en plantillas).
 type CompanyMessaging struct {
-	Name                  string  `json:"name"`
-	TransferInstructions  string  `json:"transfer_instructions"`
-	PaymentURLTemplate    string  `json:"payment_url_template"`
+	Name                 string `json:"name"`
+	TransferInstructions string `json:"transfer_instructions"`
+	PaymentURLTemplate   string `json:"payment_url_template"`
 }
 
 func (db *DB) GetCompanyMessaging(ctx context.Context, companyID int64) (*CompanyMessaging, error) {
@@ -46,6 +46,16 @@ UPDATE companies SET transfer_instructions = $1, payment_url_template = $2 WHERE
 		return sql.ErrNoRows
 	}
 	return nil
+}
+
+// CompanyNotifyAccess dice si el superadmin dejó activos el correo y WhatsApp.
+// No depende de que el buzón o el número estén cargados.
+func (db *DB) CompanyNotifyAccess(ctx context.Context, companyID int64) (email bool, whatsapp bool, err error) {
+	err = db.db.QueryRowContext(ctx, `
+SELECT COALESCE(allow_email, TRUE), COALESCE(allow_whatsapp, TRUE)
+FROM companies WHERE id = $1
+`, companyID).Scan(&email, &whatsapp)
+	return email, whatsapp, err
 }
 
 func nullStr(s string) any {
