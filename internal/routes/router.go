@@ -37,8 +37,11 @@ func Register(r *gin.Engine, deps controller.Deps, jwtMiddleware gin.HandlerFunc
 		api.PUT("/platform/companies/:id/whatsapp", deps.PutCompanyWhatsApp)
 		api.GET("/platform/mailboxes", deps.ListPlatformMailboxes)
 		api.PUT("/platform/companies/:id/mailbox", deps.PutCompanyMailbox)
+		api.GET("/company/channels", deps.GetCompanyChannels)
 		api.GET("/company/messaging", deps.GetCompanyMessaging)
 		api.PUT("/company/messaging", deps.PutCompanyMessaging)
+		api.GET("/company/payment-credentials", deps.GetPaymentCredentials)
+		api.PUT("/company/payment-credentials", deps.PutPaymentCredentials)
 	}
 
 	r.GET("/health", func(c *gin.Context) {

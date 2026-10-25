@@ -35,6 +35,12 @@ const ReminderCooldown = time.Hour
 var (
 	// ErrReminderNoChannel no se eligió ningún canal.
 	ErrReminderNoChannel = errors.New("elige al menos un canal: WhatsApp o correo")
+	// ErrCompanyChannelOff el superadmin apagó ese medio para la empresa.
+	ErrCompanyChannelOff = errors.New("esta empresa no envía por ese medio")
+	// ErrCompanyMailboxMissing el correo está permitido, pero no hay buzón cargado.
+	ErrCompanyMailboxMissing = errors.New("esta empresa no tiene correo de envío cargado")
+	// ErrCompanyWhatsAppMissing WhatsApp está permitido, pero no hay número cargado.
+	ErrCompanyWhatsAppMissing = errors.New("esta empresa no tiene número de WhatsApp cargado")
 	// ErrReminderBadChannel canal desconocido.
 	ErrReminderBadChannel = errors.New("canal no válido; usa whatsapp o email")
 	// ErrReminderNoEmail la sucursal no tiene correo.
@@ -80,6 +86,8 @@ type Service struct {
 	AppPublicURL string
 	// ReminderSendTime hora diaria (HH:MM) del ciclo de recordatorios automáticos, para mostrarla en el panel.
 	ReminderSendTime string
+	// PaymentKey cifra las credenciales de cobro. Vacía si el servidor no la tiene configurada.
+	PaymentKey []byte
 }
 
 func (s *Service) withStatus(ch repository.Charge) ChargeDTO {
@@ -252,6 +260,23 @@ func (s *Service) SendReminderNow(ctx context.Context, companyID, chargeID, memb
 			}
 		}
 	}
+	allowed, err := s.CompanyChannels(ctx, companyID)
+	if err != nil {
+		return err
+	}
+	explicit := len(channels) > 0
+	if sendEmail && !allowed.Email {
+		if explicit {
+			return ErrCompanyChannelOff
+		}
+		sendEmail = false
+	}
+	if sendWhatsApp && !allowed.WhatsApp {
+		if explicit {
+			return ErrCompanyChannelOff
+		}
+		sendWhatsApp = false
+	}
 	if !sendEmail && !sendWhatsApp {
 		return ErrReminderNoChannel
 	}
@@ -282,8 +307,15 @@ func (s *Service) SendReminderNow(ctx context.Context, companyID, chargeID, memb
 	whatsAppMessage, _ := notify.BuildWhatsAppTemplate(phase, *ch, payURL, notify.TemplateSIDs{})
 	emailMessage := fmt.Sprintf("Asunto: %s\n\n%s", subj, textBody)
 
+	var mailbox *notify.SMTPConfig
+	if sendEmail {
+		mailbox = s.CompanySMTP(ctx, companyID)
+		if mailbox == nil {
+			return ErrCompanyMailboxMissing
+		}
+	}
 	if sendEmail && s.Notify != nil {
-		if err := s.Notify.SendReminderEmailFrom(*ch, subj, textBody, s.CompanySMTP(ctx, companyID)); err != nil {
+		if err := s.Notify.SendReminderEmailFrom(*ch, subj, textBody, mailbox); err != nil {
 			return err
 		}
 	}
@@ -294,14 +326,14 @@ func (s *Service) SendReminderNow(ctx context.Context, companyID, chargeID, memb
 	}
 	if sendWhatsApp {
 		var delivery notify.SentWhatsApp
+		from, ferr := s.Repo.FirstActiveWhatsAppToForCompany(ctx, companyID)
+		if ferr != nil && !errors.Is(ferr, sql.ErrNoRows) {
+			return ferr
+		}
+		if ferr != nil || strings.TrimSpace(from) == "" {
+			return ErrCompanyWhatsAppMissing
+		}
 		if s.Notify != nil {
-			from, ferr := s.Repo.FirstActiveWhatsAppToForCompany(ctx, companyID)
-			if ferr != nil && !errors.Is(ferr, sql.ErrNoRows) {
-				return ferr
-			}
-			if ferr != nil {
-				from = ""
-			}
 			preview, sent, err := s.Notify.SendCompanyWhatsAppTemplate(*ch, from, phase, payURL)
 			if err != nil {
 				return err
@@ -386,6 +418,20 @@ type SaveMessagingInput struct {
 	Templates            []MessagingTemplateInput `json:"templates"`
 	// ReminderPolicy nula deja la frecuencia como está.
 	ReminderPolicy *domain.ReminderPolicy `json:"reminder_policy"`
+}
+
+// CompanyChannels indica qué medios de aviso dejó asignados el superadmin.
+type CompanyChannels struct {
+	Email    bool `json:"email"`
+	WhatsApp bool `json:"whatsapp"`
+}
+
+func (s *Service) CompanyChannels(ctx context.Context, companyID int64) (CompanyChannels, error) {
+	email, whatsapp, err := s.Repo.CompanyNotifyAccess(ctx, companyID)
+	if err != nil {
+		return CompanyChannels{}, err
+	}
+	return CompanyChannels{Email: email, WhatsApp: whatsapp}, nil
 }
 
 func (s *Service) GetCompanyMessagingSettings(ctx context.Context, companyID int64) (*MessagingSettingsResponse, error) {
@@ -525,11 +571,21 @@ func (s *Service) prepareWhatsAppReply(ctx context.Context, companyID, chargeID,
 	if !open {
 		return nil, "", ErrWhatsAppReplyWindow
 	}
+	access, err := s.CompanyChannels(ctx, companyID)
+	if err != nil {
+		return nil, "", err
+	}
+	if !access.WhatsApp {
+		return nil, "", ErrCompanyChannelOff
+	}
 	from := ""
 	if tn, ferr := s.Repo.FirstActiveWhatsAppToForCompany(ctx, companyID); ferr == nil {
 		from = strings.TrimSpace(tn)
 	} else if !errors.Is(ferr, sql.ErrNoRows) {
 		return nil, "", ferr
+	}
+	if from == "" {
+		return nil, "", ErrCompanyWhatsAppMissing
 	}
 	return ch, from, nil
 }

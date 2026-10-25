@@ -191,6 +191,15 @@ func (d *Deps) SimulateChargeInboundWhatsApp(c *gin.Context) {
 	c.JSON(http.StatusOK, m)
 }
 
+func (d *Deps) GetCompanyChannels(c *gin.Context) {
+	out, err := d.Svc.CompanyChannels(c.Request.Context(), d.companyID(c))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "No se pudieron leer los medios de aviso."})
+		return
+	}
+	c.JSON(http.StatusOK, out)
+}
+
 func (d *Deps) GetCompanyMessaging(c *gin.Context) {
 	out, err := d.Svc.GetCompanyMessagingSettings(c.Request.Context(), d.companyID(c))
 	if err != nil {
