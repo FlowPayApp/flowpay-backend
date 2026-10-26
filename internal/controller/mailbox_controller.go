@@ -60,6 +60,8 @@ func (d *Deps) PutCompanyMailbox(c *gin.Context) {
 		switch {
 		case errors.Is(err, service.ErrInvalidMailbox), errors.Is(err, service.ErrMailboxPasswordRequired):
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		case errors.Is(err, service.ErrMailboxKey):
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
 		case errors.Is(err, service.ErrCompanyNotFound):
 			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		case errors.Is(err, service.ErrMailboxInUse):

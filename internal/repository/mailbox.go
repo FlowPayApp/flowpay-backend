@@ -101,6 +101,26 @@ RETURNING id, company_id, from_name, from_email, smtp_host, smtp_port, smtp_user
 	return &saved, nil
 }
 
+// SetMailboxPassword reemplaza la clave solo si sigue siendo previous.
+func (db *DB) SetMailboxPassword(ctx context.Context, companyID int64, previous, sealed string) error {
+	res, err := db.db.ExecContext(ctx, `
+UPDATE company_mailboxes
+SET smtp_password = $3
+WHERE company_id = $1 AND smtp_password = $2
+`, companyID, previous, sealed)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return errors.New("smtp_password cambió antes de cifrarla")
+	}
+	return nil
+}
+
 // ErrMailboxTaken el correo ya pertenece a otra empresa.
 var ErrMailboxTaken = errors.New("mailbox taken")
 

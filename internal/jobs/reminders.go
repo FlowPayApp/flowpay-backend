@@ -13,6 +13,7 @@ import (
 	"github.com/flowpay/flowpay-backend/internal/notify"
 	"github.com/flowpay/flowpay-backend/internal/remindercontent"
 	"github.com/flowpay/flowpay-backend/internal/repository"
+	"github.com/flowpay/flowpay-backend/internal/service"
 )
 
 // Schedule hora del día a la que corre el ciclo de recordatorios automáticos.
@@ -40,7 +41,7 @@ const (
 // StartReminderJob corre una vez al día, a la hora de sched, para **todas** las empresas en `companies`.
 // Arrancar o desplegar el API no dispara envíos: el día queda reservado en job_runs y
 // solo una ejecución (aunque haya varias instancias) lo procesa.
-func StartReminderJob(ctx context.Context, repo *repository.DB, d *notify.Dispatcher, sched Schedule, appPublicURL string) {
+func StartReminderJob(ctx context.Context, repo *repository.DB, d *notify.Dispatcher, sched Schedule, appPublicURL string, smtpKey []byte) {
 	go func() {
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
@@ -69,7 +70,7 @@ func StartReminderJob(ctx context.Context, repo *repository.DB, d *notify.Dispat
 				log.Printf("[FlowPay Job] los recordatorios de %s ya se procesaron", day)
 				return
 			}
-			runAllCompanies(repo, d, appPublicURL, truncate(now))
+			runAllCompanies(repo, d, appPublicURL, truncate(now), smtpKey)
 		}
 		check()
 		for {
@@ -83,7 +84,7 @@ func StartReminderJob(ctx context.Context, repo *repository.DB, d *notify.Dispat
 	}()
 }
 
-func runAllCompanies(repo *repository.DB, d *notify.Dispatcher, appPublicURL string, today time.Time) {
+func runAllCompanies(repo *repository.DB, d *notify.Dispatcher, appPublicURL string, today time.Time, smtpKey []byte) {
 	ids, err := repo.ListCompanyIDs(context.Background())
 	if err != nil {
 		log.Println("[FlowPay Job] error listando empresas:", err)
@@ -94,7 +95,7 @@ func runAllCompanies(repo *repository.DB, d *notify.Dispatcher, appPublicURL str
 		return
 	}
 	for _, cid := range ids {
-		runOnce(context.Background(), repo, d, cid, appPublicURL, today)
+		runOnce(context.Background(), repo, d, cid, appPublicURL, today, smtpKey)
 	}
 }
 
@@ -111,7 +112,7 @@ type sender struct {
 
 // runOnce avisa a cada cobro sin pagar según su frecuencia (la propia o la de la empresa).
 // today es la fecha del ciclo, a medianoche en la zona del horario.
-func runOnce(ctx context.Context, repo *repository.DB, d *notify.Dispatcher, companyID int64, appPublicURL string, today time.Time) {
+func runOnce(ctx context.Context, repo *repository.DB, d *notify.Dispatcher, companyID int64, appPublicURL string, today time.Time, smtpKey []byte) {
 	log.Printf("[FlowPay Job] Inicio de ciclo de recordatorios (company_id=%d)…", companyID)
 	waFrom, waErr := repo.FirstActiveWhatsAppToForCompany(ctx, companyID)
 	if waErr != nil && !errors.Is(waErr, sql.ErrNoRows) {
@@ -127,7 +128,7 @@ func runOnce(ctx context.Context, repo *repository.DB, d *notify.Dispatcher, com
 		allowEmail, allowWhatsApp = emailOn, whatsAppOn
 	}
 	s := sender{
-		repo: repo, d: d, mailbox: companyMailbox(ctx, repo, companyID), waFrom: waFrom,
+		repo: repo, d: d, mailbox: companyMailbox(ctx, repo, companyID, smtpKey), waFrom: waFrom,
 		allowEmail: allowEmail, allowWhatsApp: allowWhatsApp, appPublicURL: appPublicURL,
 	}
 
@@ -282,16 +283,21 @@ func shouldSendWhatsApp(ch string) bool {
 	return v == "all" || v == "whatsapp"
 }
 
-func companyMailbox(ctx context.Context, repo *repository.DB, companyID int64) *notify.SMTPConfig {
+func companyMailbox(ctx context.Context, repo *repository.DB, companyID int64, smtpKey []byte) *notify.SMTPConfig {
 	m, err := repo.GetCompanyMailbox(ctx, companyID)
 	if err != nil || m == nil {
+		return nil
+	}
+	password, err := service.OpenMailboxPassword(smtpKey, m.CompanyID, m.SMTPPassword)
+	if err != nil {
+		log.Printf("[FlowPay Job] buzón company_id=%d: no se pudo usar la clave SMTP", companyID)
 		return nil
 	}
 	cfg := &notify.SMTPConfig{
 		Host:     m.SMTPHost,
 		Port:     m.SMTPPort,
 		Username: m.SMTPUsername,
-		Password: m.SMTPPassword,
+		Password: password,
 		From:     m.FromEmail,
 		FromName: m.FromName,
 	}

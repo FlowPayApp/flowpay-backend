@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"log"
 	"net/mail"
 	"strconv"
 	"strings"
@@ -11,6 +13,7 @@ import (
 	"github.com/flowpay/flowpay-backend/internal/model"
 	"github.com/flowpay/flowpay-backend/internal/notify"
 	"github.com/flowpay/flowpay-backend/internal/repository"
+	"github.com/flowpay/flowpay-backend/internal/secretbox"
 )
 
 var (
@@ -20,6 +23,8 @@ var (
 	ErrMailboxPasswordRequired = errors.New("indica la contraseña del correo")
 	// ErrMailboxInUse ese remitente ya está en otra empresa.
 	ErrMailboxInUse = errors.New("ese correo ya está asignado a otra empresa")
+	// ErrMailboxKey el servidor no puede cifrar. No incluye la clave.
+	ErrMailboxKey = errors.New("el servidor no tiene configurada la clave para cifrar el correo")
 )
 
 // MailboxInput lo que el super admin guarda para una empresa.
@@ -78,6 +83,12 @@ func (s *Service) SaveCompanyMailbox(ctx context.Context, companyID int64, in Ma
 		if existing == nil || strings.TrimSpace(existing.SMTPPassword) == "" {
 			return nil, ErrMailboxPasswordRequired
 		}
+	} else {
+		sealed, serr := sealMailboxPassword(s.SMTPKey, companyID, in.SMTPPassword)
+		if serr != nil {
+			return nil, serr
+		}
+		in.SMTPPassword = sealed
 	}
 
 	saved, err := s.Repo.UpsertCompanyMailbox(ctx, model.CompanyMailbox{
@@ -104,11 +115,16 @@ func (s *Service) CompanySMTP(ctx context.Context, companyID int64) *notify.SMTP
 	if err != nil || m == nil {
 		return nil
 	}
+	password, err := OpenMailboxPassword(s.SMTPKey, m.CompanyID, m.SMTPPassword)
+	if err != nil {
+		log.Printf("[FlowPay] buzón company_id=%d: no se pudo usar la clave SMTP", companyID)
+		return nil
+	}
 	cfg := &notify.SMTPConfig{
 		Host:     m.SMTPHost,
 		Port:     m.SMTPPort,
 		Username: m.SMTPUsername,
-		Password: m.SMTPPassword,
+		Password: password,
 		From:     m.FromEmail,
 		FromName: m.FromName,
 	}
@@ -116,6 +132,59 @@ func (s *Service) CompanySMTP(ctx context.Context, companyID int64) *notify.SMTP
 		return nil
 	}
 	return cfg
+}
+
+// SealPlainMailboxPasswords cifra las smtp_password que siguen en claro.
+func (s *Service) SealPlainMailboxPasswords(ctx context.Context) error {
+	if len(s.SMTPKey) != 32 {
+		return ErrMailboxKey
+	}
+	list, err := s.Repo.ListCompanyMailboxes(ctx)
+	if err != nil {
+		return err
+	}
+	for _, m := range list {
+		stored := strings.TrimSpace(m.SMTPPassword)
+		if stored == "" || secretbox.Sealed(stored) {
+			continue
+		}
+		sealed, err := sealMailboxPassword(s.SMTPKey, m.CompanyID, stored)
+		if err != nil {
+			return err
+		}
+		if err := s.Repo.SetMailboxPassword(ctx, m.CompanyID, m.SMTPPassword, sealed); err != nil {
+			return err
+		}
+		log.Printf("[FlowPay] smtp_password cifrada company_id=%d", m.CompanyID)
+	}
+	return nil
+}
+
+// OpenMailboxPassword descifra la clave solo para enviarla. No registra el valor.
+func OpenMailboxPassword(key []byte, companyID int64, stored string) (string, error) {
+	stored = strings.TrimSpace(stored)
+	if stored == "" {
+		return "", nil
+	}
+	if !secretbox.Sealed(stored) {
+		return "", errors.New("smtp_password en claro")
+	}
+	return secretbox.Open(key, stored, mailboxPasswordAAD(companyID))
+}
+
+func sealMailboxPassword(key []byte, companyID int64, plain string) (string, error) {
+	if len(key) != 32 {
+		return "", ErrMailboxKey
+	}
+	sealed, err := secretbox.Seal(key, []byte(plain), mailboxPasswordAAD(companyID))
+	if err != nil {
+		return "", ErrMailboxKey
+	}
+	return sealed, nil
+}
+
+func mailboxPasswordAAD(companyID int64) []byte {
+	return []byte(fmt.Sprintf("%d|smtp_password", companyID))
 }
 
 func cleanHeader(s string) string {

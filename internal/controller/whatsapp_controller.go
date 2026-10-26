@@ -94,7 +94,16 @@ func (d *Deps) TwilioWhatsAppWebhook(c *gin.Context) {
 	}
 	form := c.Request.PostForm
 
-	if d.TwilioWebhook.ValidateTwilioSignature && strings.TrimSpace(d.TwilioWebhook.AuthToken) != "" {
+	if d.TwilioWebhook.ValidateTwilioSignature {
+		if unsignedTwilioWebhook(c) {
+			c.Status(http.StatusForbidden)
+			return
+		}
+		if strings.TrimSpace(d.TwilioWebhook.AuthToken) == "" {
+			log.Printf("[FlowPay WhatsApp] webhook rechazado: falta FLOWPAY_TWILIO_AUTH_TOKEN")
+			c.Status(http.StatusForbidden)
+			return
+		}
 		signedURL, ok := d.twilioSignedURL(c, form)
 		if !ok {
 			c.Status(http.StatusForbidden)
@@ -102,7 +111,7 @@ func (d *Deps) TwilioWhatsAppWebhook(c *gin.Context) {
 		}
 		log.Printf("[FlowPay WhatsApp] webhook firma OK url=%s", signedURL)
 	} else {
-		log.Printf("[FlowPay WhatsApp] webhook sin validación de firma (FLOWPAY_TWILIO_VALIDATE_WEBHOOK desactivado o sin token)")
+		log.Printf("[FlowPay WhatsApp] webhook sin validación de firma (FLOWPAY_TWILIO_VALIDATE_WEBHOOK desactivado)")
 	}
 
 	from := form.Get("From")
@@ -131,6 +140,16 @@ func (d *Deps) TwilioWhatsAppWebhook(c *gin.Context) {
 	c.Status(http.StatusOK)
 }
 
+// unsignedTwilioWebhook avisa que llegó un webhook sin X-Twilio-Signature.
+// El aviso lleva la ruta y la IP. No incluye el cuerpo del mensaje.
+func unsignedTwilioWebhook(c *gin.Context) bool {
+	if strings.TrimSpace(c.GetHeader("X-Twilio-Signature")) != "" {
+		return false
+	}
+	log.Printf("[FlowPay WhatsApp] webhook sin firma path=%s ip=%s", c.Request.URL.Path, c.ClientIP())
+	return true
+}
+
 // twilioSignedURL devuelve la URL con la que Twilio firmó la petición, si la firma es válida.
 func (d *Deps) twilioSignedURL(c *gin.Context, form url.Values) (string, bool) {
 	sig := c.GetHeader("X-Twilio-Signature")
@@ -153,6 +172,10 @@ func (d *Deps) TwilioStatusWebhook(c *gin.Context) {
 		return
 	}
 	form := c.Request.PostForm
+	if unsignedTwilioWebhook(c) {
+		c.Status(http.StatusForbidden)
+		return
+	}
 	if strings.TrimSpace(d.TwilioWebhook.AuthToken) == "" {
 		c.Status(http.StatusForbidden)
 		return

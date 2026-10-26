@@ -9,7 +9,8 @@ import (
 )
 
 // BearerJWT exige Authorization: Bearer cuando secret no está vacío.
-// revoked consulta la copia en memoria de revoked_access_tokens. Un jti vacío se rechaza.
+// revoked consulta la copia en memoria de revoked_access_tokens.
+// Un token sin jti sigue válido hasta su propio vencimiento.
 func BearerJWT(secret string, revoked func(string) bool) gin.HandlerFunc {
 	if strings.TrimSpace(secret) == "" {
 		return func(c *gin.Context) { c.Next() }
@@ -23,7 +24,7 @@ func BearerJWT(secret string, revoked func(string) bool) gin.HandlerFunc {
 		}
 		raw := strings.TrimSpace(strings.TrimPrefix(h, "Bearer "))
 		claims, err := authjwt.ParseAccessToken(sec, raw)
-		if err != nil || claims.ID == "" || (revoked != nil && revoked(claims.ID)) {
+		if err != nil || (revoked != nil && revoked(claims.ID)) {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "token inválido o expirado"})
 			return
 		}

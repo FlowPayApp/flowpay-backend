@@ -27,6 +27,11 @@ type Config struct {
 	TwilioAuthToken       string
 	TwilioValidateWebhook bool
 	PaymentCredentialsKey []byte
+	// SMTPPasswordKey cifra smtp_password de cada empresa. Vacía si no está configurada.
+	SMTPPasswordKey []byte
+	// AllowWhatsAppSimulate prende POST /api/charges/:id/inbound-whatsapp/simulate.
+	// Apagado por defecto: en producción la ruta no se registra y responde 404.
+	AllowWhatsAppSimulate bool
 }
 
 func envBool(key string) bool {
@@ -93,6 +98,8 @@ func Load() Config {
 		TwilioAuthToken:       strings.TrimSpace(os.Getenv("FLOWPAY_TWILIO_AUTH_TOKEN")),
 		TwilioValidateWebhook: envBool("FLOWPAY_TWILIO_VALIDATE_WEBHOOK"),
 		PaymentCredentialsKey: paymentCredentialsKey(),
+		SMTPPasswordKey:       smtpPasswordKey(),
+		AllowWhatsAppSimulate: envBool("FLOWPAY_WHATSAPP_SIMULATE"),
 	}
 }
 
@@ -100,6 +107,15 @@ func paymentCredentialsKey() []byte {
 	key, err := secretbox.KeyFromMaterial(os.Getenv("FLOWPAY_PAYMENT_CREDENTIALS_KEY"))
 	if err != nil {
 		log.Println("warn: FLOWPAY_PAYMENT_CREDENTIALS_KEY no está configurada; no se pueden guardar credenciales de pago")
+		return nil
+	}
+	return key
+}
+
+func smtpPasswordKey() []byte {
+	key, err := secretbox.KeyFromMaterial(os.Getenv("FLOWPAY_SMTP_PASSWORD_KEY"))
+	if err != nil {
+		log.Println("warn: FLOWPAY_SMTP_PASSWORD_KEY no está configurada; no se puede cifrar smtp_password")
 		return nil
 	}
 	return key
