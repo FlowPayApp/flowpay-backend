@@ -139,6 +139,14 @@ func onPlatform() bool {
 	return strings.TrimSpace(os.Getenv("PORT")) != ""
 }
 
+// Production es FLOWPAY_ENV=production o un despliegue que define PORT.
+func Production() bool {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("FLOWPAY_ENV")), "production") {
+		return true
+	}
+	return onPlatform()
+}
+
 func listenAddr(primaryKey, fallback string) string {
 	if v := strings.TrimSpace(os.Getenv(primaryKey)); v != "" {
 		return v

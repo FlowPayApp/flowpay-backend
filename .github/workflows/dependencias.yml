@@ -1,0 +1,24 @@
+name: Dependencias
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 11 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  altas:
+    name: Vulnerabilidades en código alcanzable
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Revisar módulos que el servicio sí ejecuta
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+          govulncheck ./...

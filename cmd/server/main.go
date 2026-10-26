@@ -24,12 +24,21 @@ import (
 	"github.com/flowpay/flowpay-backend/internal/jobs"
 	"github.com/flowpay/flowpay-backend/internal/middleware"
 	"github.com/flowpay/flowpay-backend/internal/repository"
+	"github.com/flowpay/flowpay-backend/internal/revoked"
 	"github.com/flowpay/flowpay-backend/internal/routes"
 	"github.com/flowpay/flowpay-backend/internal/service"
 )
 
 func main() {
 	cfg := config.Load()
+	if config.Production() {
+		if len(cfg.JWTSecret) < 16 {
+			log.Fatal("FLOWPAY_JWT_SECRET es obligatorio en producción (mín. 16 caracteres, el mismo del SSO)")
+		}
+		if len(cfg.PaymentCredentialsKey) != 32 {
+			log.Fatal("FLOWPAY_PAYMENT_CREDENTIALS_KEY es obligatoria en producción (mín. 32 caracteres, la misma en payments)")
+		}
+	}
 	db, err := sql.Open("pgx", cfg.DSN)
 	if err != nil {
 		log.Fatal(err)
@@ -108,10 +117,19 @@ func main() {
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
 	}))
-	routes.Register(r, deps, middleware.BearerJWT(cfg.JWTSecret))
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	revokedList := revoked.New()
+	if strings.TrimSpace(cfg.JWTSecret) != "" {
+		if err := revoked.Watch(ctx, revokedList, repo.ListLiveRevokedJTIs); err != nil {
+			if config.Production() {
+				log.Fatalf("revoked_access_tokens: %v", err)
+			}
+			log.Printf("warn: no se pudo cargar jti revocados: %v", err)
+		}
+	}
+	routes.Register(r, deps, middleware.BearerJWT(cfg.JWTSecret, revokedList.Has))
 
 	jobs.StartReminderJob(ctx, repo, cfg.Notify, reminderSchedule, cfg.AppPublicURL)
 
@@ -193,7 +211,7 @@ func allowBrowserOrigin(origin string) bool {
 	case "https://geldflus.com", "https://www.geldflus.com", "https://app.geldflus.com":
 		return true
 	}
-	if isLocalDevOrigin(origin) {
+	if !config.Production() && isLocalDevOrigin(origin) {
 		return true
 	}
 	for _, extra := range strings.Split(os.Getenv("FLOWPAY_CORS_ORIGINS"), ",") {
