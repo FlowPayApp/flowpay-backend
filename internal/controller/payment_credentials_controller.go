@@ -41,18 +41,49 @@ func (d *Deps) PutPaymentCredentials(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "payload inválido"})
 		return
 	}
-	if err := d.Svc.SavePaymentCredentials(c.Request.Context(), d.companyID(c), body); err != nil {
-		var invalid *service.PaymentCredentialError
-		switch {
-		case errors.Is(err, service.ErrPaymentCredentialKey):
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
-		case errors.As(err, &invalid):
-			c.JSON(http.StatusBadRequest, gin.H{"error": invalid.Error()})
-		default:
-			log.Printf("credenciales de pago: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudieron guardar las credenciales"})
-		}
+	out, err := d.Svc.RequestPaymentCredentialChange(c.Request.Context(), d.companyID(c), d.userID(c), body)
+	if err != nil {
+		writeCredentialError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true})
+	c.JSON(http.StatusOK, out)
+}
+
+func (d *Deps) PreviewPaymentCredentialChange(c *gin.Context) {
+	out, err := d.Svc.PreviewCredentialConfirmation(c.Request.Context(), c.Param("token"))
+	if err != nil {
+		writeCredentialError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+func (d *Deps) ConfirmPaymentCredentialChange(c *gin.Context) {
+	out, err := d.Svc.ConfirmCredentialChange(c.Request.Context(), c.Param("token"))
+	if err != nil {
+		writeCredentialError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+func writeCredentialError(c *gin.Context, err error) {
+	var invalid *service.PaymentCredentialError
+	switch {
+	case errors.Is(err, service.ErrPaymentCredentialKey):
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
+	case errors.Is(err, service.ErrCredentialDelivery):
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "No se pudo enviar la confirmación. Inténtalo de nuevo."})
+	case errors.Is(err, service.ErrCredentialExpired):
+		c.JSON(http.StatusGone, gin.H{"error": err.Error()})
+	case errors.Is(err, service.ErrCredentialUsed):
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+	case errors.Is(err, service.ErrCredentialLink):
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+	case errors.As(err, &invalid):
+		c.JSON(http.StatusBadRequest, gin.H{"error": invalid.Error()})
+	default:
+		log.Printf("credenciales de pago: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "no se pudieron guardar las credenciales"})
+	}
 }

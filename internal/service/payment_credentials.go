@@ -1,13 +1,10 @@
 package service
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"strings"
 	"unicode"
-
-	"github.com/flowpay/flowpay-backend/internal/secretbox"
 )
 
 // ErrPaymentCredentialKey el servidor no puede cifrar. No incluye la clave.
@@ -20,21 +17,25 @@ func (e *PaymentCredentialError) Error() string { return e.msg }
 
 // PaymentCredentialStatus medios que tienen credencial. Nunca incluye el secreto.
 type PaymentCredentialStatus struct {
-	Khipu    bool `json:"khipu"`
-	Webpay   bool `json:"webpay"`
-	Oneclick bool `json:"oneclick"`
-	Fintoc   bool `json:"fintoc"`
+	Khipu           bool                      `json:"khipu"`
+	Webpay          bool                      `json:"webpay"`
+	Oneclick        bool                      `json:"oneclick"`
+	Fintoc          bool                      `json:"fintoc"`
+	TransferGateway string                    `json:"transfer_gateway,omitempty"`
+	Pending         []PendingCredentialChange `json:"pending,omitempty"`
 }
 
 // SavePaymentCredentialsInput un campo ausente no se toca. Vacío borra. Un valor reemplaza.
 type SavePaymentCredentialsInput struct {
-	KhipuAPIKey        *string `json:"khipu_api_key"`
-	WebpayCommerceCode *string `json:"webpay_commerce_code"`
-	WebpayAPIKey       *string `json:"webpay_api_key"`
-	OneclickMallCode   *string `json:"oneclick_mall_code"`
-	OneclickStoreCode  *string `json:"oneclick_store_code"`
-	OneclickAPIKey     *string `json:"oneclick_api_key"`
-	FintocSecretKey    *string `json:"fintoc_secret_key"`
+	KhipuAPIKey         *string `json:"khipu_api_key"`
+	WebpayCommerceCode  *string `json:"webpay_commerce_code"`
+	WebpayAPIKey        *string `json:"webpay_api_key"`
+	OneclickMallCode    *string `json:"oneclick_mall_code"`
+	OneclickStoreCode   *string `json:"oneclick_store_code"`
+	OneclickAPIKey      *string `json:"oneclick_api_key"`
+	FintocSecretKey     *string `json:"fintoc_secret_key"`
+	FintocWebhookSecret *string `json:"fintoc_webhook_secret"`
+	TransferGateway     *string `json:"transfer_gateway"`
 }
 
 type credentialWrite struct {
@@ -42,44 +43,15 @@ type credentialWrite struct {
 	plain  string
 }
 
-func (s *Service) PaymentCredentialStatus(ctx context.Context, companyID int64) (PaymentCredentialStatus, error) {
-	flags, err := s.Repo.PaymentCredentialFlags(ctx, companyID)
-	if err != nil {
-		return PaymentCredentialStatus{}, err
+func planTransferGateway(raw *string) (string, bool, error) {
+	if raw == nil {
+		return "", false, nil
 	}
-	return PaymentCredentialStatus{
-		Khipu:    flags.Khipu,
-		Webpay:   flags.Webpay,
-		Oneclick: flags.Oneclick,
-		Fintoc:   flags.Fintoc,
-	}, nil
-}
-
-func (s *Service) SavePaymentCredentials(ctx context.Context, companyID int64, in SavePaymentCredentialsInput) error {
-	writes, err := planCredentialWrites(in)
-	if err != nil {
-		return err
+	value := strings.ToLower(strings.TrimSpace(*raw))
+	if value != "khipu" && value != "fintoc" {
+		return "", false, &PaymentCredentialError{msg: "la transferencia activa es Khipu o Fintoc"}
 	}
-	if len(writes) == 0 {
-		return &PaymentCredentialError{msg: "no hay credenciales para guardar"}
-	}
-	if len(s.PaymentKey) != 32 {
-		return ErrPaymentCredentialKey
-	}
-	fields := make(map[string]*string, len(writes))
-	for _, write := range writes {
-		if write.plain == "" {
-			fields[write.column] = nil
-			continue
-		}
-		buf := []byte(write.plain)
-		sealed, err := secretbox.Seal(s.PaymentKey, buf, credentialAAD(companyID, write.column))
-		if err != nil {
-			return ErrPaymentCredentialKey
-		}
-		fields[write.column] = &sealed
-	}
-	return s.Repo.SavePaymentCredentialFields(ctx, companyID, fields)
+	return value, true, nil
 }
 
 func credentialAAD(companyID int64, column string) []byte {
@@ -101,6 +73,13 @@ func planCredentialWrites(in SavePaymentCredentialsInput) ([]credentialWrite, er
 			return nil, err
 		}
 		writes = append(writes, credentialWrite{column: "fintoc_secret_key", plain: value})
+	}
+	if in.FintocWebhookSecret != nil {
+		value, err := secretOrClear(*in.FintocWebhookSecret, "el secreto del webhook de Fintoc")
+		if err != nil {
+			return nil, err
+		}
+		writes = append(writes, credentialWrite{column: "fintoc_webhook_secret", plain: value})
 	}
 	pair, err := pairedSecrets(
 		[]*string{in.WebpayCommerceCode, in.WebpayAPIKey},
