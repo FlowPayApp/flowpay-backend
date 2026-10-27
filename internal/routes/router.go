@@ -13,6 +13,9 @@ func Register(r *gin.Engine, deps controller.Deps, jwtMiddleware gin.HandlerFunc
 	r.POST("/api/webhooks/twilio/whatsapp", deps.TwilioWhatsAppWebhook)
 	r.POST("/api/webhooks/twilio/status", deps.TwilioStatusWebhook)
 
+	r.GET("/api/public/credential-confirm/:token", deps.PreviewPaymentCredentialChange)
+	r.POST("/api/public/credential-confirm/:token", deps.ConfirmPaymentCredentialChange)
+
 	api := r.Group("/api")
 	api.Use(jwtMiddleware)
 	{
