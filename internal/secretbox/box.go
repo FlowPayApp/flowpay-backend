@@ -18,6 +18,11 @@ import (
 
 const versionPrefix = "v1."
 
+// Sealed indica si value ya tiene el formato de Seal.
+func Sealed(value string) bool {
+	return strings.HasPrefix(strings.TrimSpace(value), versionPrefix)
+}
+
 // ErrKeyMaterial la clave de aplicación no alcanza para cifrar.
 var ErrKeyMaterial = errors.New("la clave de cifrado debe tener al menos 32 caracteres")
 

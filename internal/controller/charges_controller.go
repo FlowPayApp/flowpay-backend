@@ -45,7 +45,7 @@ func (d *Deps) PatchCharge(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json"})
 		return
 	}
-	if err := d.Svc.PatchCharge(c.Request.Context(), d.companyID(c), id, d.memberUID(c), in); err != nil {
+	if err := d.Svc.PatchCharge(c.Request.Context(), d.companyID(c), id, d.memberUID(c), d.userID(c), in); err != nil {
 		if service.ErrNotFound(err) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 			return

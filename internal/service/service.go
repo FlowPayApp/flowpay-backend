@@ -88,6 +88,8 @@ type Service struct {
 	ReminderSendTime string
 	// PaymentKey cifra las credenciales de cobro. Vacía si el servidor no la tiene configurada.
 	PaymentKey []byte
+	// SMTPKey cifra smtp_password. Vacía si el servidor no la tiene configurada.
+	SMTPKey []byte
 }
 
 func (s *Service) withStatus(ch repository.Charge) ChargeDTO {
@@ -695,7 +697,7 @@ type PatchChargeInput struct {
 	ChargeRemindersInput
 }
 
-func (s *Service) PatchCharge(ctx context.Context, companyID, chargeID, memberUID int64, in PatchChargeInput) error {
+func (s *Service) PatchCharge(ctx context.Context, companyID, chargeID, memberUID, actor int64, in PatchChargeInput) error {
 	has := in.ClientID != nil || in.DueDate != nil || in.Amount != nil || in.SetPaid != nil || in.ChargeRemindersInput.any()
 	if !has {
 		return errors.New("nada que actualizar")
@@ -759,7 +761,11 @@ func (s *Service) PatchCharge(ctx context.Context, companyID, chargeID, memberUI
 	if ch.PaidAt != nil {
 		return nil
 	}
-	return s.Repo.MarkChargePaid(ctx, chargeID, ch.Amount)
+	if err := s.Repo.MarkChargePaid(ctx, chargeID, ch.Amount); err != nil {
+		return err
+	}
+	s.audit(ctx, actor, chargeID, companyID, auditChargeMarkedPaid)
+	return nil
 }
 
 func (s *Service) PlatformOverview(ctx context.Context) (*PlatformOverviewResponse, error) {

@@ -38,6 +38,15 @@ func main() {
 		if len(cfg.PaymentCredentialsKey) != 32 {
 			log.Fatal("FLOWPAY_PAYMENT_CREDENTIALS_KEY es obligatoria en producción (mín. 32 caracteres, la misma en payments)")
 		}
+		if strings.TrimSpace(cfg.TwilioAuthToken) == "" {
+			log.Fatal("FLOWPAY_TWILIO_AUTH_TOKEN es obligatorio en producción")
+		}
+		if !cfg.TwilioValidateWebhook {
+			log.Fatal("FLOWPAY_TWILIO_VALIDATE_WEBHOOK debe estar activo en producción (1, true o yes)")
+		}
+		if len(cfg.SMTPPasswordKey) != 32 {
+			log.Fatal("FLOWPAY_SMTP_PASSWORD_KEY es obligatoria en producción (mín. 32 caracteres)")
+		}
 	}
 	db, err := sql.Open("pgx", cfg.DSN)
 	if err != nil {
@@ -79,6 +88,9 @@ func main() {
 	if err := repo.EnsurePaymentCredentialsSchema(context.Background()); err != nil {
 		log.Printf("warn: credenciales de pago: %v", err)
 	}
+	if err := repo.EnsureAuditSchema(context.Background()); err != nil {
+		log.Printf("warn: auditoría: %v", err)
+	}
 	if err := os.MkdirAll(filepath.Clean(cfg.UploadDir), 0o755); err != nil {
 		log.Fatal("upload dir:", err)
 	}
@@ -90,6 +102,13 @@ func main() {
 		AppPublicURL:     cfg.AppPublicURL,
 		ReminderSendTime: reminderSchedule.Clock(),
 		PaymentKey:       cfg.PaymentCredentialsKey,
+		SMTPKey:          cfg.SMTPPasswordKey,
+	}
+	if err := svc.SealPlainMailboxPasswords(context.Background()); err != nil {
+		if config.Production() {
+			log.Fatalf("smtp_password: %v", err)
+		}
+		log.Printf("warn: claves SMTP en claro sin cifrar: %v", err)
 	}
 	wa := &service.WhatsAppService{Repo: repo, AccountSID: cfg.TwilioAccountSID, AuthToken: cfg.TwilioAuthToken}
 	deps := controller.Deps{
@@ -104,7 +123,9 @@ func main() {
 		JWTSecret:      cfg.JWTSecret,
 	}
 
-	r := gin.Default()
+	gin.SetMode(gin.ReleaseMode)
+	r := gin.New()
+	r.Use(gin.Logger(), gin.Recovery())
 	r.Use(func(c *gin.Context) {
 		c.Header("Cache-Control", "no-store")
 		c.Next()
@@ -129,9 +150,9 @@ func main() {
 			log.Printf("warn: no se pudo cargar jti revocados: %v", err)
 		}
 	}
-	routes.Register(r, deps, middleware.BearerJWT(cfg.JWTSecret, revokedList.Has))
+	routes.Register(r, deps, middleware.BearerJWT(cfg.JWTSecret, revokedList.Has), cfg.AllowWhatsAppSimulate)
 
-	jobs.StartReminderJob(ctx, repo, cfg.Notify, reminderSchedule, cfg.AppPublicURL)
+	jobs.StartReminderJob(ctx, repo, cfg.Notify, reminderSchedule, cfg.AppPublicURL, cfg.SMTPPasswordKey)
 
 	srv := &http.Server{Addr: cfg.Addr, Handler: r}
 	go func() {

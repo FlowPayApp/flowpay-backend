@@ -4,14 +4,16 @@ import (
 	"net/http"
 
 	"github.com/flowpay/flowpay-backend/internal/controller"
+	"github.com/flowpay/flowpay-backend/internal/middleware"
 	"github.com/gin-gonic/gin"
 )
 
-func Register(r *gin.Engine, deps controller.Deps, jwtMiddleware gin.HandlerFunc) {
+func Register(r *gin.Engine, deps controller.Deps, jwtMiddleware gin.HandlerFunc, allowWhatsAppSimulate bool) {
 	r.GET("/api/public/attachments/:token", deps.PublicAttachment)
 	r.GET("/api/public/chat-files/:token/:name", deps.PublicChatFile)
-	r.POST("/api/webhooks/twilio/whatsapp", deps.TwilioWhatsAppWebhook)
-	r.POST("/api/webhooks/twilio/status", deps.TwilioStatusWebhook)
+	limitTwilio := middleware.TwilioWebhookLimit()
+	r.POST("/api/webhooks/twilio/whatsapp", limitTwilio, deps.TwilioWhatsAppWebhook)
+	r.POST("/api/webhooks/twilio/status", limitTwilio, deps.TwilioStatusWebhook)
 
 	r.GET("/api/public/credential-confirm/:token", deps.PreviewPaymentCredentialChange)
 	r.POST("/api/public/credential-confirm/:token", deps.ConfirmPaymentCredentialChange)
@@ -31,7 +33,9 @@ func Register(r *gin.Engine, deps controller.Deps, jwtMiddleware gin.HandlerFunc
 		api.POST("/charges/:id/whatsapp/file", deps.SendChargeWhatsAppFile)
 		api.POST("/charges/:id/read", deps.MarkChargeRead)
 		api.GET("/inbox", deps.Inbox)
-		api.POST("/charges/:id/inbound-whatsapp/simulate", deps.SimulateChargeInboundWhatsApp)
+		if allowWhatsAppSimulate {
+			api.POST("/charges/:id/inbound-whatsapp/simulate", deps.SimulateChargeInboundWhatsApp)
+		}
 		api.POST("/charges/:id/reminders", deps.SendReminder)
 		api.POST("/charges/:id/attachment", deps.UploadChargeAttachment)
 		api.GET("/dashboard", deps.Dashboard)
@@ -40,6 +44,7 @@ func Register(r *gin.Engine, deps controller.Deps, jwtMiddleware gin.HandlerFunc
 		api.PUT("/platform/companies/:id/whatsapp", deps.PutCompanyWhatsApp)
 		api.GET("/platform/mailboxes", deps.ListPlatformMailboxes)
 		api.PUT("/platform/companies/:id/mailbox", deps.PutCompanyMailbox)
+		api.GET("/company/clients/export", deps.ExportClients)
 		api.GET("/company/channels", deps.GetCompanyChannels)
 		api.GET("/company/messaging", deps.GetCompanyMessaging)
 		api.PUT("/company/messaging", deps.PutCompanyMessaging)

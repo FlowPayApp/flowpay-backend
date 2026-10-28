@@ -183,3 +183,24 @@ func (db *DB) EnsureWhatsAppSchema(ctx context.Context) error {
 	}
 	return nil
 }
+
+// EnsureAuditSchema registra acciones de este servicio: quién, qué, cuándo y empresa.
+func (db *DB) EnsureAuditSchema(ctx context.Context) error {
+	stmts := []string{
+		`CREATE TABLE IF NOT EXISTS audit_log (
+			id BIGSERIAL PRIMARY KEY,
+			actor_user_id BIGINT,
+			target_id BIGINT,
+			company_id BIGINT,
+			action TEXT NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_log_company_created ON audit_log (company_id, created_at DESC)`,
+	}
+	for _, q := range stmts {
+		if _, err := db.db.ExecContext(ctx, q); err != nil {
+			return err
+		}
+	}
+	return nil
+}
