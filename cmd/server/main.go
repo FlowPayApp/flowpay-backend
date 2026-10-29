@@ -85,6 +85,9 @@ func main() {
 	if err := repo.EnsureReminderPolicySchema(context.Background()); err != nil {
 		log.Printf("warn: frecuencia de recordatorios: %v", err)
 	}
+	if err := repo.EnsurePaymentPortalSchema(context.Background()); err != nil {
+		log.Printf("warn: enlace de pago de la empresa: %v", err)
+	}
 	if err := repo.EnsurePaymentCredentialsSchema(context.Background()); err != nil {
 		log.Printf("warn: credenciales de pago: %v", err)
 	}

@@ -145,8 +145,22 @@ func PhaseFromCharge(ch repository.Charge, now time.Time, priorOverdue int) (pha
 	return PhaseOverdueFollowUp, 0
 }
 
+// ChoosePayURL elige el enlace del recordatorio.
+// Un portal propio aprobado reemplaza al de Geldflus. Sin ese portal, se usa el enlace de la sucursal.
+func ChoosePayURL(portal, portalURL, flowpayLink, templateURL string) string {
+	if strings.EqualFold(strings.TrimSpace(portal), "external") {
+		if u := strings.TrimSpace(portalURL); u != "" {
+			return u
+		}
+	}
+	if link := strings.TrimSpace(flowpayLink); link != "" {
+		return link
+	}
+	return strings.TrimSpace(templateURL)
+}
+
 // ResolveReminder resuelve el correo y el WhatsApp (plantilla de la empresa o texto del sistema).
-// appPublicURL es el origen del frontend; con eso {{url_pago}} es el portal de la sucursal.
+// appPublicURL es el origen del frontend; con eso el enlace de Geldflus es el portal de la sucursal.
 func ResolveReminder(ctx context.Context, repo *repository.DB, companyID int64, phase string, daysUntil int, priorOverdue int, ch repository.Charge, appPublicURL string) (emailSubject, emailBody, whatsappBody, payURL string, err error) {
 	rows, err := repo.ListReminderTemplates(ctx, companyID)
 	if err != nil {
@@ -156,10 +170,12 @@ func ResolveReminder(ctx context.Context, repo *repository.DB, companyID int64, 
 	if err != nil {
 		return "", "", "", "", err
 	}
-	payURL = buildPaymentURL(cm.PaymentURLTemplate, ch)
-	if link := clientPortalURL(ctx, repo, appPublicURL, companyID, ch.ClientID); link != "" {
-		payURL = link
+	templateURL := buildPaymentURL(cm.PaymentURLTemplate, ch)
+	flowpayLink := ""
+	if ChoosePayURL(cm.PaymentPortal, cm.PaymentPortalURL, "", "") == "" {
+		flowpayLink = clientPortalURL(ctx, repo, appPublicURL, companyID, ch.ClientID)
 	}
+	payURL = ChoosePayURL(cm.PaymentPortal, cm.PaymentPortalURL, flowpayLink, templateURL)
 	defSubject, defBody := defaultSubjectBody(phase, priorOverdue, ch)
 	t := pickTemplate(rows, phase, daysUntil)
 	if t == nil {
