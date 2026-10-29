@@ -4,10 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"log"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/flowpay/flowpay-backend/internal/domain"
+	"github.com/flowpay/flowpay-backend/internal/notify"
 	"github.com/flowpay/flowpay-backend/internal/repository"
 )
 
@@ -85,6 +88,9 @@ func (s *Service) SaveCompanyPaymentPortal(ctx context.Context, companyID, actor
 			return PaymentPortalView{}, err
 		}
 		s.audit(ctx, actor, 0, companyID, paymentPortalAudit(action))
+		if action == "pending" {
+			s.alertPaymentPortalRequest(ctx, companyID, next.Pending)
+		}
 	}
 	return presentPaymentPortal(repository.PaymentPortal{
 		Mode:       next.Mode,
@@ -144,6 +150,53 @@ func (s *Service) RejectCompanyPaymentPortal(ctx context.Context, companyID, act
 	}
 	s.audit(ctx, actor, 0, companyID, auditPaymentPortalRejected)
 	return nil
+}
+
+func (s *Service) alertPaymentPortalRequest(ctx context.Context, companyID int64, rawURL string) {
+	if s == nil || s.Notify == nil || s.Repo == nil {
+		return
+	}
+	name := ""
+	if cm, err := s.Repo.GetCompanyMessaging(ctx, companyID); err == nil && cm != nil {
+		name = cm.Name
+	}
+	emails, err := s.Repo.ListPlatformAdminEmails(ctx)
+	if err != nil {
+		log.Printf("[FlowPay] aviso de enlace de pago: %v", err)
+		return
+	}
+	if len(emails) == 0 {
+		log.Printf("[FlowPay] aviso de enlace de pago: no hay superadmin activo")
+		return
+	}
+	subject, note := paymentPortalAlert(name, companyID, rawURL, s.AppPublicURL)
+	for _, to := range emails {
+		if err := s.Notify.SendPlatformLetter(to, subject, note); err != nil {
+			log.Printf("[FlowPay] aviso de enlace de pago a %s: %v", to, err)
+		}
+	}
+}
+
+func paymentPortalAlert(company string, companyID int64, rawURL, appPublic string) (string, notify.CredentialNotice) {
+	company = strings.NewReplacer("\r", "", "\n", "").Replace(strings.TrimSpace(company))
+	if company == "" {
+		company = "Una empresa"
+	}
+	note := notify.CredentialNotice{
+		Kicker:   "Enlace de pago",
+		Greeting: "Estimado,",
+		Lead:     company + " pidió usar su portal en los recordatorios. Hasta que la apruebe o la rechace, los avisos siguen con el enlace que ya tenían.",
+		Rows: [][2]string{
+			{"Empresa", company},
+			{"Número", strconv.FormatInt(companyID, 10)},
+			{"Dirección", strings.TrimSpace(rawURL)},
+		},
+	}
+	if base := strings.TrimRight(strings.TrimSpace(appPublic), "/"); base != "" {
+		note.ActionURL = base + "/platform/companies"
+		note.ActionLabel = "Revisar solicitud"
+	}
+	return "Enlace de pago por aprobar: " + company, note
 }
 
 func nextPaymentPortal(current paymentPortalState, in SavePaymentPortalInput) (paymentPortalState, string, error) {

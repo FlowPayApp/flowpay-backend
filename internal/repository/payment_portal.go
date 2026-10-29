@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 )
 
@@ -24,6 +25,31 @@ type PendingPaymentPortal struct {
 	URL         string
 	PendingURL  string
 	PendingAt   *time.Time
+}
+
+// ListPlatformAdminEmails correos de los superadmin activos.
+func (db *DB) ListPlatformAdminEmails(ctx context.Context) ([]string, error) {
+	rows, err := db.db.QueryContext(ctx, `
+SELECT email FROM users
+WHERE is_platform_admin = TRUE AND is_active = TRUE AND email <> ''
+ORDER BY id
+`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var email string
+		if err := rows.Scan(&email); err != nil {
+			return nil, err
+		}
+		email = strings.TrimSpace(email)
+		if email != "" {
+			out = append(out, email)
+		}
+	}
+	return out, rows.Err()
 }
 
 // EnsurePaymentPortalSchema guarda el portal elegido y la dirección pendiente de aprobación.

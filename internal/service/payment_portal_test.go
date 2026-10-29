@@ -1,6 +1,9 @@
 package service
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestNextPaymentPortal(t *testing.T) {
 	approved := paymentPortalState{Mode: "external", URL: "https://pagos.acme.cl"}
@@ -29,5 +32,21 @@ func TestNextPaymentPortal(t *testing.T) {
 	next, action, err = nextPaymentPortal(same, SavePaymentPortalInput{Mode: "external", URL: same.Pending})
 	if err != nil || action != "same" {
 		t.Fatalf("la misma pendiente: %+v %s %v", next, action, err)
+	}
+}
+
+func TestPaymentPortalAlert(t *testing.T) {
+	subject, note := paymentPortalAlert("Acme\n", 12, "https://pagos.acme.cl", "https://geldflus.com/")
+	if subject != "Enlace de pago por aprobar: Acme" {
+		t.Fatalf("asunto: %s", subject)
+	}
+	if note.Rows[0][1] != "Acme" || note.Rows[1][1] != "12" || note.Rows[2][1] != "https://pagos.acme.cl" {
+		t.Fatalf("filas: %+v", note.Rows)
+	}
+	if note.ActionURL != "https://geldflus.com/platform/companies" || note.ActionLabel != "Revisar solicitud" {
+		t.Fatalf("enlace: %s %s", note.ActionURL, note.ActionLabel)
+	}
+	if !strings.Contains(note.Lead, "Acme pidió") {
+		t.Fatalf("texto: %s", note.Lead)
 	}
 }
