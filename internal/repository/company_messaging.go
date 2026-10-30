@@ -10,15 +10,18 @@ type CompanyMessaging struct {
 	Name                 string `json:"name"`
 	TransferInstructions string `json:"transfer_instructions"`
 	PaymentURLTemplate   string `json:"payment_url_template"`
+	PaymentPortal        string `json:"-"`
+	PaymentPortalURL     string `json:"-"`
 }
 
 func (db *DB) GetCompanyMessaging(ctx context.Context, companyID int64) (*CompanyMessaging, error) {
 	var m CompanyMessaging
 	var ti, pu sql.NullString
 	err := db.db.QueryRowContext(ctx, `
-SELECT name, transfer_instructions, payment_url_template
+SELECT name, transfer_instructions, payment_url_template,
+       COALESCE(payment_portal, 'flowpay'), COALESCE(payment_portal_url, '')
 FROM companies WHERE id = $1
-`, companyID).Scan(&m.Name, &ti, &pu)
+`, companyID).Scan(&m.Name, &ti, &pu, &m.PaymentPortal, &m.PaymentPortalURL)
 	if err != nil {
 		return nil, err
 	}

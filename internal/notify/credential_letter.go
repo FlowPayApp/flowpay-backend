@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"html/template"
+	"log"
 	"mime"
 	"net"
 	"net/mail"
@@ -14,13 +15,15 @@ import (
 	"time"
 )
 
-// CredentialNotice es el correo para confirmar un cambio de credenciales. No lleva secretos.
+// CredentialNotice es el correo de la plataforma. No lleva secretos.
 type CredentialNotice struct {
-	Greeting  string
-	Lead      string
-	Notes     []string
-	Rows      [][2]string
-	ActionURL string
+	Kicker      string
+	Greeting    string
+	Lead        string
+	Notes       []string
+	Rows        [][2]string
+	ActionURL   string
+	ActionLabel string
 }
 
 func (d *Dispatcher) SendCredentialConfirmation(to, subject string, note CredentialNotice) error {
@@ -30,6 +33,24 @@ func (d *Dispatcher) SendCredentialConfirmation(to, subject string, note Credent
 	to = strings.TrimSpace(strings.ToLower(to))
 	if to == "" || strings.TrimSpace(note.ActionURL) == "" {
 		return fmt.Errorf("sin destinatario o enlace")
+	}
+	htmlBody, err := note.html()
+	if err != nil {
+		return err
+	}
+	return sendPlatformMessage(d.smtp, to, subject, note.plain(), htmlBody)
+}
+
+// SendPlatformLetter manda un aviso con la carta de GeldFlus. Sin SMTP, lo deja en el log.
+func (d *Dispatcher) SendPlatformLetter(to, subject string, note CredentialNotice) error {
+	if d == nil || d.smtp == nil || !d.smtp.Enabled() {
+		log.Printf("[FlowPay email mock -> %s] %s | %s", to, subject, strings.ReplaceAll(note.plain(), "\n", " "))
+		return nil
+	}
+	to = strings.TrimSpace(strings.ToLower(to))
+	if to == "" {
+		log.Printf("[FlowPay email] sin destinatario; no se envia")
+		return nil
 	}
 	htmlBody, err := note.html()
 	if err != nil {
@@ -59,7 +80,11 @@ func (n CredentialNotice) plain() string {
 		}
 	}
 	if n.ActionURL != "" {
-		lines = append(lines, "", "Confirmar cambio: "+n.ActionURL)
+		label := strings.TrimSpace(n.ActionLabel)
+		if label == "" {
+			label = "Confirmar cambio"
+		}
+		lines = append(lines, "", label+": "+n.ActionURL)
 	}
 	lines = append(lines,
 		"",
@@ -179,14 +204,14 @@ var credentialLetterTmpl = template.Must(template.New("credential").Funcs(templa
 <p style="margin:0;font-family:Georgia,'Times New Roman',serif;font-size:22px;letter-spacing:0.04em;color:#ffffff;">GeldFlus</p>
 </td></tr>
 <tr><td style="padding:34px 36px 8px;font-family:Arial,Helvetica,sans-serif;color:#1c1917;">
-<p style="margin:0 0 8px;font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:#0f6e6b;">Credenciales de pago</p>
+<p style="margin:0 0 8px;font-size:11px;letter-spacing:0.16em;text-transform:uppercase;color:#0f6e6b;">{{if .Kicker}}{{.Kicker}}{{else}}Credenciales de pago{{end}}</p>
 {{if .Greeting}}<p style="margin:0;font-family:Georgia,'Times New Roman',serif;font-size:28px;line-height:1.25;color:#1c1917;">{{.Greeting}}</p>{{end}}
 <table role="presentation" cellpadding="0" cellspacing="0" style="margin:16px 0 0;"><tr><td style="width:42px;height:3px;background:#0f6e6b;font-size:0;line-height:0;">&nbsp;</td></tr></table>
 {{if .Lead}}<p style="margin:22px 0 0;font-size:16px;line-height:1.7;color:#292524;">{{.Lead}}</p>{{end}}
 {{if .ActionURL}}
 <table role="presentation" cellpadding="0" cellspacing="0" style="margin:24px 0 0;">
 <tr><td bgcolor="#0f6e6b" style="background:#0f6e6b;border-radius:12px;">
-<a href="{{.ActionURL}}" style="display:inline-block;padding:14px 22px;font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:700;color:#ffffff;text-decoration:none;">Confirmar cambio</a>
+<a href="{{.ActionURL}}" style="display:inline-block;padding:14px 22px;font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:700;color:#ffffff;text-decoration:none;">{{if .ActionLabel}}{{.ActionLabel}}{{else}}Confirmar cambio{{end}}</a>
 </td></tr>
 </table>
 <p style="margin:12px 0 0;font-size:12px;line-height:1.5;color:#8a837b;">Si el botón no abre, copie este enlace:<br>{{.ActionURL}}</p>
