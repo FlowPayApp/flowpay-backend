@@ -10,6 +10,15 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// @Summary		Bandeja de entrada
+// @Description	Conversaciones de WhatsApp de los cobros con mensajes recientes.
+// @Tags			Bandeja
+// @Produce		json
+// @Security		BearerAuth
+// @Success		200	{object}	model.Inbox
+// @Failure		500	{object}	errorResponse
+// @Failure		401	{object}	errorResponse
+// @Router			/api/inbox [get]
 func (d *Deps) Inbox(c *gin.Context) {
 	out, err := d.Svc.Inbox(c.Request.Context(), d.companyID(c), d.memberUID(c))
 	if err != nil {
@@ -20,6 +29,17 @@ func (d *Deps) Inbox(c *gin.Context) {
 	c.JSON(http.StatusOK, out)
 }
 
+// @Summary	Marcar conversación como leída
+// @Tags		Bandeja
+// @Produce	json
+// @Security	BearerAuth
+// @Param		id	path		int	true	"ID del cobro"
+// @Success	200	{object}	okResponse
+// @Failure	400	{object}	errorResponse
+// @Failure	404	{object}	errorResponse
+// @Failure	500	{object}	errorResponse
+// @Failure	401	{object}	errorResponse
+// @Router		/api/charges/{id}/read [post]
 func (d *Deps) MarkChargeRead(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -37,6 +57,21 @@ func (d *Deps) MarkChargeRead(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+// @Summary	Enviar archivo por WhatsApp
+// @Tags		WhatsApp
+// @Accept		mpfd
+// @Produce	json
+// @Security	BearerAuth
+// @Param		id		path		int		true	"ID del cobro"
+// @Param		file	formData	file	true	"Archivo"
+// @Param		text	formData	string	false	"Texto que acompaña al archivo"
+// @Success	200		{object}	model.Message
+// @Failure	400		{object}	errorResponse
+// @Failure	404		{object}	errorResponse
+// @Failure	409		{object}	errorResponse
+// @Failure	502		{object}	errorResponse
+// @Failure	401		{object}	errorResponse
+// @Router		/api/charges/{id}/whatsapp/file [post]
 func (d *Deps) SendChargeWhatsAppFile(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -87,6 +122,16 @@ func (d *Deps) SendChargeWhatsAppFile(c *gin.Context) {
 }
 
 // PublicChatFile lo descarga Twilio para entregar el archivo; el token es aleatorio y vence en 24 horas.
+//
+//	@Summary		Archivo de chat (público)
+//	@Description	Lo descarga Twilio para entregar el archivo. El token vence en 24 horas.
+//	@Tags			Público
+//	@Produce		octet-stream
+//	@Param			token	path	string	true	"Token del archivo"
+//	@Param			name	path	string	true	"Nombre del archivo"
+//	@Success		200		{file}	file
+//	@Failure		404
+//	@Router			/api/public/chat-files/{token}/{name} [get]
 func (d *Deps) PublicChatFile(c *gin.Context) {
 	f, err := d.Svc.OpenPublicChatFile(c.Request.Context(), c.Param("token"))
 	if err != nil {
