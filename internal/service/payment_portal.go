@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flowpay/flowpay-backend/internal/audit"
 	"github.com/flowpay/flowpay-backend/internal/domain"
 	"github.com/flowpay/flowpay-backend/internal/notify"
 	"github.com/flowpay/flowpay-backend/internal/repository"
@@ -87,7 +88,15 @@ func (s *Service) SaveCompanyPaymentPortal(ctx context.Context, companyID, actor
 		}); err != nil {
 			return PaymentPortalView{}, err
 		}
-		s.audit(ctx, actor, 0, companyID, paymentPortalAudit(action))
+		s.Record(ctx, audit.Event{
+			Domain:     audit.DomainCredential,
+			Action:     paymentPortalAudit(action),
+			ActorID:    actor,
+			CompanyID:  companyID,
+			TargetType: audit.TargetCompany,
+			TargetID:   audit.ID(companyID),
+			Summary:    "Cambió el portal de pago",
+		})
 		if action == "pending" {
 			s.alertPaymentPortalRequest(ctx, companyID, next.Pending)
 		}
@@ -130,7 +139,15 @@ func (s *Service) ApproveCompanyPaymentPortal(ctx context.Context, companyID, ac
 		}
 		return err
 	}
-	s.audit(ctx, actor, 0, companyID, auditPaymentPortalApproved)
+	s.Record(ctx, audit.Event{
+		Domain:     audit.DomainCredential,
+		Action:     auditPaymentPortalApproved,
+		ActorID:    actor,
+		CompanyID:  companyID,
+		TargetType: audit.TargetCompany,
+		TargetID:   audit.ID(companyID),
+		Summary:    "Aprobó el portal de pago",
+	})
 	return nil
 }
 
@@ -148,7 +165,16 @@ func (s *Service) RejectCompanyPaymentPortal(ctx context.Context, companyID, act
 		}
 		return err
 	}
-	s.audit(ctx, actor, 0, companyID, auditPaymentPortalRejected)
+	s.Record(ctx, audit.Event{
+		Domain:     audit.DomainCredential,
+		Action:     auditPaymentPortalRejected,
+		ActorID:    actor,
+		CompanyID:  companyID,
+		TargetType: audit.TargetCompany,
+		TargetID:   audit.ID(companyID),
+		Summary:    "Rechazó el portal de pago",
+		Meta:       map[string]any{"reason": reason},
+	})
 	return nil
 }
 
