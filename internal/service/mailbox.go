@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/flowpay/flowpay-backend/internal/audit"
 	"github.com/flowpay/flowpay-backend/internal/model"
 	"github.com/flowpay/flowpay-backend/internal/notify"
 	"github.com/flowpay/flowpay-backend/internal/repository"
@@ -106,7 +107,21 @@ func (s *Service) SaveCompanyMailbox(ctx context.Context, companyID int64, in Ma
 	if errors.Is(err, repository.ErrMailboxTaken) {
 		return nil, ErrMailboxInUse
 	}
-	return saved, err
+	if err != nil {
+		return nil, err
+	}
+	if saved != nil {
+		s.Record(ctx, audit.Event{
+			Domain:     audit.DomainCredential,
+			Action:     audit.ActionMailboxChanged,
+			CompanyID:  companyID,
+			TargetType: audit.TargetCompany,
+			TargetID:   audit.ID(companyID),
+			Summary:    "Cambió el buzón de correo",
+			Meta:       map[string]any{"from_email": saved.FromEmail, "smtp_host": saved.SMTPHost},
+		})
+	}
+	return saved, nil
 }
 
 // CompanySMTP config de envío de la empresa. Nil si no tiene buzón.

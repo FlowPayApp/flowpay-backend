@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flowpay/flowpay-backend/internal/audit"
 	"github.com/flowpay/flowpay-backend/internal/domain"
 	"github.com/flowpay/flowpay-backend/internal/model"
 	"github.com/flowpay/flowpay-backend/internal/notify"
@@ -185,11 +186,31 @@ func (s *Service) CreateCharge(ctx context.Context, companyID, memberUID int64, 
 	if _, err := s.Repo.EnsureClientPaymentToken(ctx, companyID, in.ClientID); err != nil {
 		log.Printf("[FlowPay] no se pudo asignar el enlace de pago a la sucursal: %v", err)
 	}
+	s.Record(ctx, audit.Event{
+		Domain:     audit.DomainCharge,
+		Action:     audit.ActionChargeCreated,
+		CompanyID:  companyID,
+		TargetType: audit.TargetCharge,
+		TargetID:   audit.ID(id),
+		Summary:    "Creó un cobro",
+		Meta:       map[string]any{"client_id": in.ClientID, "amount": in.Amount, "due_date": in.DueDate},
+	})
 	return id, nil
 }
 
 func (s *Service) DeleteCharge(ctx context.Context, companyID, chargeID int64) error {
-	return s.Repo.DeleteCharge(ctx, companyID, chargeID)
+	if err := s.Repo.DeleteCharge(ctx, companyID, chargeID); err != nil {
+		return err
+	}
+	s.Record(ctx, audit.Event{
+		Domain:     audit.DomainCharge,
+		Action:     audit.ActionChargeDeleted,
+		CompanyID:  companyID,
+		TargetType: audit.TargetCharge,
+		TargetID:   audit.ID(chargeID),
+		Summary:    "Eliminó un cobro",
+	})
+	return nil
 }
 
 func (s *Service) Dashboard(ctx context.Context, companyID, memberUID int64) (*DashboardResponse, error) {
@@ -318,6 +339,7 @@ func (s *Service) SendReminderNow(ctx context.Context, companyID, chargeID, memb
 	}
 	if sendEmail && s.Notify != nil {
 		if err := s.Notify.SendReminderEmailFrom(*ch, subj, textBody, mailbox); err != nil {
+			s.recordReminderFailed(ctx, companyID, chargeID, "email")
 			return err
 		}
 	}
@@ -338,6 +360,7 @@ func (s *Service) SendReminderNow(ctx context.Context, companyID, chargeID, memb
 		if s.Notify != nil {
 			preview, sent, err := s.Notify.SendCompanyWhatsAppTemplate(*ch, from, phase, payURL)
 			if err != nil {
+				s.recordReminderFailed(ctx, companyID, chargeID, "whatsapp")
 				return err
 			}
 			if preview != "" {
@@ -355,6 +378,15 @@ func (s *Service) SendReminderNow(ctx context.Context, companyID, chargeID, memb
 			}
 		}
 	}
+	s.Record(ctx, audit.Event{
+		Domain:     audit.DomainMessage,
+		Action:     audit.ActionReminderSent,
+		CompanyID:  companyID,
+		TargetType: audit.TargetCharge,
+		TargetID:   audit.ID(chargeID),
+		Summary:    "Envió un recordatorio manual",
+		Meta:       map[string]any{"channels": channels},
+	})
 	return nil
 }
 
@@ -510,7 +542,19 @@ func (s *Service) SaveCompanyMessagingSettings(ctx context.Context, companyID in
 			WhatsAppBody: t.WhatsAppBody,
 		})
 	}
-	return s.Repo.ReplaceReminderTemplates(ctx, companyID, rows)
+	if err := s.Repo.ReplaceReminderTemplates(ctx, companyID, rows); err != nil {
+		return err
+	}
+	s.Record(ctx, audit.Event{
+		Domain:     audit.DomainMessage,
+		Action:     audit.ActionMessagingSettingsChanged,
+		CompanyID:  companyID,
+		TargetType: audit.TargetCompany,
+		TargetID:   audit.ID(companyID),
+		Summary:    "Cambió los avisos de la empresa",
+		Meta:       map[string]any{"templates": len(rows), "policy": in.ReminderPolicy != nil},
+	})
+	return nil
 }
 
 func manualReminderTemplate(ch repository.Charge, priorOverdueReminders int, now time.Time) (subject string, body string) {
@@ -639,6 +683,15 @@ func (s *Service) saveOutboundMessage(ctx context.Context, companyID, chargeID i
 	if err != nil {
 		return saved, nil
 	}
+	s.Record(ctx, audit.Event{
+		Domain:     audit.DomainMessage,
+		Action:     audit.ActionWhatsAppOutbound,
+		CompanyID:  companyID,
+		TargetType: audit.TargetMessage,
+		TargetID:   audit.ID(id),
+		Summary:    "Envió un WhatsApp",
+		Meta:       map[string]any{"charge_id": chargeID, "media": len(media) > 0},
+	})
 	return got, nil
 }
 
@@ -702,7 +755,8 @@ func (s *Service) PatchCharge(ctx context.Context, companyID, chargeID, memberUI
 	if !has {
 		return errors.New("nada que actualizar")
 	}
-	if _, err := s.Repo.GetCharge(ctx, companyID, chargeID, memberUID); err != nil {
+	before, err := s.Repo.GetCharge(ctx, companyID, chargeID, memberUID)
+	if err != nil {
 		return err
 	}
 	if in.ClientID != nil {
@@ -747,12 +801,51 @@ func (s *Service) PatchCharge(ctx context.Context, companyID, chargeID, memberUI
 			return err
 		}
 	}
+	if in.ClientID != nil || duePtr != nil || in.Amount != nil || reminders != nil {
+		meta := map[string]any{}
+		if in.Amount != nil {
+			meta["amount_before"] = before.Amount
+			meta["amount_after"] = *in.Amount
+		}
+		if duePtr != nil {
+			meta["due_date"] = duePtr.Format("2006-01-02")
+		}
+		if in.ClientID != nil {
+			meta["client_id_before"] = before.ClientID
+			meta["client_id_after"] = *in.ClientID
+		}
+		if reminders != nil {
+			meta["reminders"] = true
+		}
+		s.Record(ctx, audit.Event{
+			Domain:     audit.DomainCharge,
+			Action:     audit.ActionChargeUpdated,
+			ActorID:    actor,
+			CompanyID:  companyID,
+			TargetType: audit.TargetCharge,
+			TargetID:   audit.ID(chargeID),
+			Summary:    "Actualizó un cobro",
+			Meta:       meta,
+		})
+	}
 
 	if in.SetPaid == nil {
 		return nil
 	}
 	if !*in.SetPaid {
-		return s.Repo.ClearChargePayment(ctx, companyID, chargeID)
+		if err := s.Repo.ClearChargePayment(ctx, companyID, chargeID); err != nil {
+			return err
+		}
+		s.Record(ctx, audit.Event{
+			Domain:     audit.DomainCharge,
+			Action:     audit.ActionChargeReopened,
+			ActorID:    actor,
+			CompanyID:  companyID,
+			TargetType: audit.TargetCharge,
+			TargetID:   audit.ID(chargeID),
+			Summary:    "Reabrió un cobro",
+		})
+		return nil
 	}
 	ch, err := s.Repo.GetCharge(ctx, companyID, chargeID, memberUID)
 	if err != nil {
@@ -764,7 +857,16 @@ func (s *Service) PatchCharge(ctx context.Context, companyID, chargeID, memberUI
 	if err := s.Repo.MarkChargePaid(ctx, chargeID, ch.Amount); err != nil {
 		return err
 	}
-	s.audit(ctx, actor, chargeID, companyID, auditChargeMarkedPaid)
+	s.Record(ctx, audit.Event{
+		Domain:     audit.DomainCharge,
+		Action:     audit.ActionChargeMarkedPaid,
+		ActorID:    actor,
+		CompanyID:  companyID,
+		TargetType: audit.TargetCharge,
+		TargetID:   audit.ID(chargeID),
+		Summary:    "Marcó un cobro como pagado",
+		Meta:       map[string]any{"amount": ch.Amount},
+	})
 	return nil
 }
 

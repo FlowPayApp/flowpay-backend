@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+
+	"github.com/flowpay/flowpay-backend/internal/audit"
 )
 
 // ExportClientsCSV arma el archivo de clientes de la empresa y deja el registro de auditoría.
@@ -34,7 +36,16 @@ func (s *Service) ExportClientsCSV(ctx context.Context, companyID, memberUID, ac
 	if err := w.Error(); err != nil {
 		return nil, err
 	}
-	s.audit(ctx, actor, 0, companyID, auditClientsExported)
+	s.Record(ctx, audit.Event{
+		Domain:     audit.DomainClient,
+		Action:     audit.ActionClientsExported,
+		ActorID:    actor,
+		CompanyID:  companyID,
+		TargetType: audit.TargetCompany,
+		TargetID:   audit.ID(companyID),
+		Summary:    "Exportó clientes",
+		Meta:       map[string]any{"rows": len(rows)},
+	})
 	return buf.Bytes(), nil
 }
 

@@ -55,18 +55,18 @@ var deliveryStatuses = map[string]bool{
 }
 
 // HandleDeliveryStatus aplica el aviso de Twilio al WhatsApp enviado con ese sid.
-func (s *WhatsAppService) HandleDeliveryStatus(ctx context.Context, sid, status, errorCode string) error {
+func (s *WhatsAppService) HandleDeliveryStatus(ctx context.Context, sid, status, errorCode string) (int64, error) {
 	sid = strings.TrimSpace(sid)
 	status = strings.ToLower(strings.TrimSpace(status))
 	if sid == "" || !deliveryStatuses[status] {
-		return nil
+		return 0, nil
 	}
 	errorCode = strings.TrimSpace(errorCode)
 	if len(errorCode) > 20 {
 		errorCode = errorCode[:20]
 	}
-	_, err := s.Repo.UpdateWhatsAppDelivery(ctx, sid, status, errorCode)
-	return err
+	n, err := s.Repo.UpdateWhatsAppDelivery(ctx, sid, status, errorCode)
+	return n, err
 }
 
 // HandleInbound guarda mensaje entrante enrutado por número receptor (To).

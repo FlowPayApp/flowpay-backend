@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flowpay/flowpay-backend/internal/audit"
 	"github.com/flowpay/flowpay-backend/internal/notify"
 	"github.com/flowpay/flowpay-backend/internal/repository"
 	"github.com/flowpay/flowpay-backend/internal/secretbox"
@@ -96,7 +97,20 @@ func (s *Service) RequestPaymentCredentialChange(ctx context.Context, companyID,
 		return CredentialChangeReceipt{}, &PaymentCredentialError{msg: "no hay credenciales para guardar"}
 	}
 	if len(writes) == 0 && setGateway {
-		return CredentialChangeReceipt{}, s.Repo.SetTransferGateway(ctx, companyID, gateway)
+		if err := s.Repo.SetTransferGateway(ctx, companyID, gateway); err != nil {
+			return CredentialChangeReceipt{}, err
+		}
+		s.Record(ctx, audit.Event{
+			Domain:     audit.DomainCredential,
+			Action:     audit.ActionTransferGatewayChanged,
+			ActorID:    userID,
+			CompanyID:  companyID,
+			TargetType: audit.TargetCredential,
+			TargetID:   gateway,
+			Summary:    "Cambió la pasarela de transferencia",
+			Meta:       map[string]any{"gateway": gateway},
+		})
+		return CredentialChangeReceipt{}, nil
 	}
 	flags, err := s.Repo.PaymentCredentialFlags(ctx, companyID)
 	if err != nil {
@@ -156,6 +170,16 @@ func (s *Service) RequestPaymentCredentialChange(ctx context.Context, companyID,
 		log.Printf("confirmación de credenciales: %v", err)
 		return CredentialChangeReceipt{}, ErrCredentialDelivery
 	}
+	s.Record(ctx, audit.Event{
+		Domain:     audit.DomainCredential,
+		Action:     audit.ActionCredentialChangeRequested,
+		ActorID:    userID,
+		CompanyID:  companyID,
+		TargetType: audit.TargetCredential,
+		TargetID:   provider,
+		Summary:    "Pidió un cambio de credenciales de " + provider,
+		Meta:       map[string]any{"provider": provider, "action": action, "sent_to": maskEmail(admin.Email)},
+	})
 	return CredentialChangeReceipt{
 		Pending:  true,
 		Action:   action,
@@ -179,10 +203,20 @@ func (s *Service) PreviewCredentialConfirmation(ctx context.Context, token strin
 }
 
 func (s *Service) ConfirmCredentialChange(ctx context.Context, token string) (CredentialChangePreview, error) {
-	provider, action, err := s.Repo.ConsumeCredentialConfirmation(ctx, credentialTokenHash(token), time.Now())
+	companyID, provider, action, err := s.Repo.ConsumeCredentialConfirmation(ctx, credentialTokenHash(token), time.Now())
 	if err != nil {
 		return CredentialChangePreview{}, err
 	}
+	s.Record(ctx, audit.Event{
+		Domain:     audit.DomainCredential,
+		Action:     audit.ActionCredentialChangeConfirmed,
+		ActorRole:  "company_admin",
+		CompanyID:  companyID,
+		TargetType: audit.TargetCredential,
+		TargetID:   provider,
+		Summary:    "Confirmó el cambio de credenciales de " + provider,
+		Meta:       map[string]any{"provider": provider, "action": action},
+	})
 	return credentialPreview("", provider, action, time.Time{}), nil
 }
 

@@ -6,7 +6,9 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"time"
 
+	"github.com/flowpay/flowpay-backend/internal/audit"
 	"github.com/flowpay/flowpay-backend/internal/service"
 	"github.com/gin-gonic/gin"
 )
@@ -52,6 +54,7 @@ func (d *Deps) PutPaymentCredentials(c *gin.Context) {
 func (d *Deps) PreviewPaymentCredentialChange(c *gin.Context) {
 	out, err := d.Svc.PreviewCredentialConfirmation(c.Request.Context(), c.Param("token"))
 	if err != nil {
+		d.noteCredentialLink(c, err)
 		writeCredentialError(c, err)
 		return
 	}
@@ -61,10 +64,36 @@ func (d *Deps) PreviewPaymentCredentialChange(c *gin.Context) {
 func (d *Deps) ConfirmPaymentCredentialChange(c *gin.Context) {
 	out, err := d.Svc.ConfirmCredentialChange(c.Request.Context(), c.Param("token"))
 	if err != nil {
+		d.noteCredentialLink(c, err)
 		writeCredentialError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, out)
+}
+
+func (d *Deps) noteCredentialLink(c *gin.Context, err error) {
+	reason := ""
+	switch {
+	case errors.Is(err, service.ErrCredentialExpired):
+		reason = "expired"
+	case errors.Is(err, service.ErrCredentialUsed):
+		reason = "used"
+	case errors.Is(err, service.ErrCredentialLink):
+		reason = "unknown"
+	default:
+		return
+	}
+	if d == nil || d.Svc == nil || !audit.Once("credential-link:"+c.ClientIP()+":"+reason, 10*time.Minute) {
+		return
+	}
+	d.Svc.Record(c.Request.Context(), audit.Event{
+		Domain:    audit.DomainCredential,
+		Action:    audit.ActionCredentialLinkRejected,
+		Outcome:   audit.OutcomeDenied,
+		ActorRole: "public",
+		Summary:   "Enlace de confirmación de credenciales rechazado",
+		Meta:      map[string]any{"reason": reason},
+	})
 }
 
 func writeCredentialError(c *gin.Context, err error) {
