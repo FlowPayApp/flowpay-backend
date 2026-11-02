@@ -377,11 +377,21 @@ type MessagingPhaseDefaults struct {
 	EmailBody    string `json:"email_body"`
 }
 
-func (s *Service) messagingDefaults() map[string]MessagingPhaseDefaults {
+func reminderPreviewURL(cm *repository.CompanyMessaging) string {
+	if cm == nil {
+		return ""
+	}
+	return remindercontent.ChoosePayURL(cm.PaymentPortal, cm.PaymentPortalURL, "", "")
+}
+
+func (s *Service) messagingDefaults(payURL string) map[string]MessagingPhaseDefaults {
 	today := dateOnly(time.Now())
-	payURL := strings.TrimRight(strings.TrimSpace(s.AppPublicURL), "/") + "/pay/ejemplo"
-	if strings.TrimSpace(s.AppPublicURL) == "" {
-		payURL = "https://geldflus.com/pay/ejemplo"
+	payURL = strings.TrimSpace(payURL)
+	if payURL == "" {
+		payURL = strings.TrimRight(strings.TrimSpace(s.AppPublicURL), "/") + "/pay/ejemplo"
+		if strings.TrimSpace(s.AppPublicURL) == "" {
+			payURL = "https://geldflus.com/pay/ejemplo"
+		}
 	}
 	phases := []struct {
 		phase string
@@ -455,7 +465,7 @@ func (s *Service) GetCompanyMessagingSettings(ctx context.Context, companyID int
 		Templates:            tpl,
 		ReminderPolicy:       policy,
 		SendTime:             s.ReminderSendTime,
-		Defaults:             s.messagingDefaults(),
+		Defaults:             s.messagingDefaults(reminderPreviewURL(cm)),
 	}, nil
 }
 

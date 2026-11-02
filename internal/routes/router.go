@@ -48,6 +48,11 @@ func Register(r *gin.Engine, deps controller.Deps, jwtMiddleware gin.HandlerFunc
 		api.GET("/company/channels", deps.GetCompanyChannels)
 		api.GET("/company/messaging", deps.GetCompanyMessaging)
 		api.PUT("/company/messaging", deps.PutCompanyMessaging)
+		api.GET("/company/payment-portal", deps.GetPaymentPortal)
+		api.PUT("/company/payment-portal", deps.PutPaymentPortal)
+		api.GET("/platform/payment-portals", deps.ListPendingPaymentPortals)
+		api.POST("/platform/companies/:id/payment-portal/approve", deps.ApprovePaymentPortal)
+		api.POST("/platform/companies/:id/payment-portal/reject", deps.RejectPaymentPortal)
 		api.GET("/company/payment-credentials", deps.GetPaymentCredentials)
 		api.PUT("/company/payment-credentials", deps.PutPaymentCredentials)
 	}
