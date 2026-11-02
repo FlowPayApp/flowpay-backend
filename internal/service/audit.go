@@ -7,11 +7,8 @@ import (
 	"github.com/flowpay/flowpay-backend/internal/audit"
 )
 
-func (s *Service) recordReminderFailed(ctx context.Context, companyID, chargeID int64, channel string) {
-	summary := "No se pudo enviar el recordatorio por correo"
-	if channel == "whatsapp" {
-		summary = "No se pudo enviar el recordatorio por WhatsApp"
-	}
+func (s *Service) recordReminderFailed(ctx context.Context, companyID, chargeID int64, channel string, cause error) {
+	summary, meta := audit.ReminderFailure("manual", channel, cause)
 	s.Record(ctx, audit.Event{
 		Domain:     audit.DomainMessage,
 		Action:     audit.ActionReminderFailed,
@@ -20,7 +17,7 @@ func (s *Service) recordReminderFailed(ctx context.Context, companyID, chargeID 
 		TargetType: audit.TargetCharge,
 		TargetID:   audit.ID(chargeID),
 		Summary:    summary,
-		Meta:       map[string]any{"channel": channel, "kind": "manual"},
+		Meta:       meta,
 	})
 }
 

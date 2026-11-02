@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/flowpay/flowpay-backend/internal/audit"
 	"github.com/flowpay/flowpay-backend/internal/ratelimit"
 	"github.com/gin-gonic/gin"
 )
@@ -21,7 +22,7 @@ const (
 func TwilioWebhookLimit() gin.HandlerFunc {
 	lim := ratelimit.New()
 	return func(c *gin.Context) {
-		ip := c.ClientIP()
+		ip := audit.RequestIP(c)
 		if ip == "" {
 			ip = "unknown"
 		}

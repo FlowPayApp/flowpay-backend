@@ -5,8 +5,11 @@ package audit
 
 import (
 	"context"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
+	"net"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -60,6 +63,7 @@ type Event struct {
 	TargetID   string
 	IP         string
 	UserAgent  string
+	ClientHint string
 	Summary    string
 	Meta       map[string]any
 }
@@ -69,8 +73,9 @@ type Execer interface {
 }
 
 type httpStamp struct {
-	IP        string
-	UserAgent string
+	IP         string
+	UserAgent  string
+	ClientHint string
 }
 
 type actorStamp struct {
@@ -86,11 +91,11 @@ const (
 	keyActor
 )
 
-func WithHTTP(ctx context.Context, ip, userAgent string) context.Context {
+func WithHTTP(ctx context.Context, ip, userAgent, clientHint string) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return context.WithValue(ctx, keyHTTP, httpStamp{IP: ip, UserAgent: userAgent})
+	return context.WithValue(ctx, keyHTTP, httpStamp{IP: ip, UserAgent: userAgent, ClientHint: clientHint})
 }
 
 func WithActor(ctx context.Context, actorID, companyID int64, role string) context.Context {
@@ -118,6 +123,9 @@ func Finish(ctx context.Context, e Event) Event {
 		if e.UserAgent == "" {
 			e.UserAgent = http.UserAgent
 		}
+		if e.ClientHint == "" {
+			e.ClientHint = http.ClientHint
+		}
 	}
 	if actor, ok := ctx.Value(keyActor).(actorStamp); ok {
 		if e.ActorID == 0 {
@@ -143,6 +151,7 @@ func clip(e Event) Event {
 	e.TargetID = clipText(e.TargetID, 64)
 	e.IP = clipText(e.IP, 64)
 	e.UserAgent = clipText(e.UserAgent, 300)
+	e.ClientHint = clipText(e.ClientHint, 300)
 	e.Summary = clipText(e.Summary, 400)
 	return e
 }
@@ -154,6 +163,46 @@ func clipText(s string, max int) string {
 	}
 	runes := []rune(s)
 	return string(runes[:max])
+}
+
+// ReminderFailure arma la frase y el detalle de un aviso que no salió.
+func ReminderFailure(kind, channel string, cause error) (string, map[string]any) {
+	summary := "No se pudo enviar el recordatorio por correo"
+	code := "reminder_email"
+	if channel == "whatsapp" {
+		summary = "No se pudo enviar el recordatorio por WhatsApp"
+		code = "reminder_whatsapp"
+	}
+	reason := Cause(cause)
+	if reason != "" && !strings.Contains(summary, reason) {
+		summary += ": " + reason
+	}
+	meta := map[string]any{"channel": channel, "kind": kind, "code": code}
+	if reason != "" {
+		meta["reason"] = reason
+	}
+	return summary, meta
+}
+
+// Cause deja el motivo de un fallo, corto y sin secretos.
+func Cause(err error) string {
+	if err == nil {
+		return ""
+	}
+	return Scrub(err.Error())
+}
+
+// Scrub aplana un texto de error y corta valores que parecen secretos.
+func Scrub(raw string) string {
+	raw = strings.Join(strings.Fields(raw), " ")
+	lower := strings.ToLower(raw)
+	for _, key := range []string{"password=", "passwd=", "secret=", "api_key=", "apikey=", "authorization=", "tbk-api-key-secret="} {
+		if i := strings.Index(lower, key); i >= 0 {
+			raw = raw[:i+len(key)] + "***"
+			lower = strings.ToLower(raw)
+		}
+	}
+	return clipText(raw, 180)
 }
 
 // ID formatea un id numérico. Cero queda vacío.
@@ -230,9 +279,11 @@ func SchemaStatements() []string {
 			target_id TEXT NOT NULL DEFAULT '',
 			ip TEXT NOT NULL DEFAULT '',
 			user_agent TEXT NOT NULL DEFAULT '',
+			client_hint TEXT NOT NULL DEFAULT '',
 			summary TEXT NOT NULL DEFAULT '',
 			metadata JSONB NOT NULL DEFAULT '{}'::jsonb
 		)`,
+		`ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS client_hint TEXT NOT NULL DEFAULT ''`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_events_occurred ON audit_events (occurred_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_events_domain ON audit_events (domain, occurred_at DESC)`,
 		`CREATE INDEX IF NOT EXISTS idx_audit_events_company ON audit_events (company_id, occurred_at DESC)`,
@@ -259,27 +310,160 @@ func Insert(ctx context.Context, ex Execer, e Event) error {
 INSERT INTO audit_events (
 	service, domain, action, outcome,
 	actor_user_id, actor_role, company_id,
-	target_type, target_id, ip, user_agent, summary, metadata
+	target_type, target_id, ip, user_agent, client_hint, summary, metadata
 ) VALUES (
 	$1, $2, $3, $4,
 	NULLIF($5::bigint, 0), $6, NULLIF($7::bigint, 0),
-	$8, $9, $10, $11, $12, $13::jsonb
+	$8, $9, $10, $11, $12, $13, $14::jsonb
 )`,
 		e.Service, e.Domain, e.Action, e.Outcome,
 		e.ActorID, e.ActorRole, e.CompanyID,
-		e.TargetType, e.TargetID, e.IP, e.UserAgent, e.Summary, string(meta),
+		e.TargetType, e.TargetID, e.IP, e.UserAgent, e.ClientHint, e.Summary, string(meta),
 	)
 	return err
 }
 
-// StampHTTP guarda IP y user agent en el contexto de cada petición.
+// RequestIP es la IP de quien usa el navegador.
+// Detrás de Vite o Railway la conexión directa es el proxy; la IP real viaja en X-Flowpay-Client-Ip.
+func RequestIP(c *gin.Context) string {
+	if c == nil || c.Request == nil {
+		return ""
+	}
+	return chooseIP(c.RemoteIP(), c.GetHeader("X-Flowpay-Client-Ip"), c.GetHeader("X-Forwarded-For"), c.GetHeader("X-Real-Ip"), c.GetHeader("X-Flowpay-Edge"))
+}
+
+func chooseIP(remote, marked, forwarded, realIP, edgeHeader string) string {
+	if edgeOK(edgeHeader) {
+		if ip := cleanIP(marked); ip != "" {
+			return ip
+		}
+	}
+	return pickIP(remote, marked, forwarded, realIP)
+}
+
+func edgeOK(header string) bool {
+	secret := strings.TrimSpace(os.Getenv("FLOWPAY_EDGE_SECRET"))
+	header = strings.TrimSpace(header)
+	if secret == "" || header == "" || len(secret) != len(header) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(header), []byte(secret)) == 1
+}
+
+func pickIP(remote, marked, forwarded, realIP string) string {
+	if trustedProxy(remote) {
+		if ip := cleanIP(marked); ip != "" {
+			return ip
+		}
+		if ip := firstIP(forwarded); ip != "" {
+			return ip
+		}
+		if ip := cleanIP(realIP); ip != "" {
+			return ip
+		}
+	}
+	if ip := cleanIP(remote); ip != "" {
+		return ip
+	}
+	return ""
+}
+
+func trustedProxy(ip string) bool {
+	parsed := net.ParseIP(strings.TrimSpace(ip))
+	if parsed == nil {
+		return false
+	}
+	if parsed.IsLoopback() || parsed.IsPrivate() || parsed.IsLinkLocalUnicast() {
+		return true
+	}
+	// 100.64.0.0/10 lo usan balanceadores (Railway). No es la IP de la persona.
+	v4 := parsed.To4()
+	return v4 != nil && v4[0] == 100 && v4[1]&0xc0 == 64
+}
+
+func firstIP(header string) string {
+	for _, part := range strings.Split(header, ",") {
+		if ip := cleanIP(part); ip != "" {
+			return ip
+		}
+	}
+	return ""
+}
+
+func cleanIP(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(value); err == nil {
+		value = host
+	}
+	value = strings.Trim(value, "[]")
+	parsed := net.ParseIP(value)
+	if parsed == nil {
+		return ""
+	}
+	return parsed.String()
+}
+
+// preferHint elige la marca del navegador. Brave y otros se anuncian ahí, y en el agente escriben Chrome.
+func preferHint(marked, native string) string {
+	marked = strings.TrimSpace(marked)
+	native = strings.TrimSpace(native)
+	if specificBrand(marked) {
+		return marked
+	}
+	if native != "" {
+		return native
+	}
+	return marked
+}
+
+func specificBrand(hint string) bool {
+	for _, name := range brandNames(hint) {
+		lower := strings.ToLower(name)
+		if strings.Contains(lower, "not") && strings.Contains(lower, "brand") {
+			continue
+		}
+		if lower == "chromium" || lower == "google chrome" {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func brandNames(hint string) []string {
+	var names []string
+	for len(hint) > 0 {
+		start := strings.Index(hint, `"`)
+		if start < 0 {
+			break
+		}
+		hint = hint[start+1:]
+		end := strings.Index(hint, `"`)
+		if end < 0 {
+			break
+		}
+		name := hint[:end]
+		hint = strings.TrimSpace(hint[end+1:])
+		if strings.HasPrefix(hint, ";v=") {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+// StampHTTP guarda IP, user agent y la marca del navegador en el contexto de cada petición.
 func StampHTTP() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ua := ""
+		hint := ""
 		if c.Request != nil {
 			ua = c.Request.UserAgent()
+			hint = preferHint(c.GetHeader("X-Flowpay-Client-Brands"), c.GetHeader("Sec-CH-UA"))
 		}
-		c.Request = c.Request.WithContext(WithHTTP(c.Request.Context(), c.ClientIP(), ua))
+		c.Request = c.Request.WithContext(WithHTTP(c.Request.Context(), RequestIP(c), ua, hint))
 		c.Next()
 	}
 }

@@ -209,7 +209,7 @@ func unsignedTwilioWebhook(c *gin.Context) bool {
 	if strings.TrimSpace(c.GetHeader("X-Twilio-Signature")) != "" {
 		return false
 	}
-	log.Printf("[FlowPay WhatsApp] webhook sin firma path=%s ip=%s", c.Request.URL.Path, c.ClientIP())
+	log.Printf("[FlowPay WhatsApp] webhook sin firma path=%s ip=%s", c.Request.URL.Path, audit.RequestIP(c))
 	return true
 }
 
@@ -228,16 +228,20 @@ func (d *Deps) twilioSignedURL(c *gin.Context, form url.Values) (string, bool) {
 }
 
 func (d *Deps) noteTwilioSignature(c *gin.Context, reason string) {
-	if d == nil || d.Svc == nil || !audit.Once("twilio-signature:"+c.ClientIP(), 10*time.Minute) {
+	if d == nil || d.Svc == nil || !audit.Once("twilio-signature:"+audit.RequestIP(c), 10*time.Minute) {
 		return
+	}
+	label := "la firma no coincide"
+	if reason == "missing" {
+		label = "llegó sin firma"
 	}
 	d.Svc.Record(c.Request.Context(), audit.Event{
 		Domain:    audit.DomainMessage,
 		Action:    audit.ActionWhatsAppSignatureRejected,
 		Outcome:   audit.OutcomeDenied,
 		ActorRole: "webhook",
-		Summary:   "Webhook de WhatsApp con firma inválida",
-		Meta:      map[string]any{"reason": reason},
+		Summary:   "Webhook de WhatsApp rechazado: " + label,
+		Meta:      map[string]any{"code": reason, "reason": label},
 	})
 }
 
@@ -249,9 +253,15 @@ func (d *Deps) noteWhatsAppUndelivered(c *gin.Context, sid, status, errorCode st
 	if err != nil {
 		return
 	}
-	meta := map[string]any{"channel": "whatsapp", "status": status}
+	meta := map[string]any{"channel": "whatsapp", "status": status, "code": "whatsapp_undelivered"}
+	summary := "WhatsApp no se pudo entregar"
 	if code := strings.TrimSpace(errorCode); code != "" && len(code) <= 20 {
 		meta["error_code"] = code
+		meta["reason"] = "Twilio informó el código " + code
+		summary += ": código " + code
+	} else if strings.TrimSpace(status) != "" {
+		meta["reason"] = "estado " + strings.TrimSpace(status)
+		summary += ": estado " + strings.TrimSpace(status)
 	}
 	d.Svc.Record(c.Request.Context(), audit.Event{
 		Domain:     audit.DomainMessage,
@@ -261,7 +271,7 @@ func (d *Deps) noteWhatsAppUndelivered(c *gin.Context, sid, status, errorCode st
 		CompanyID:  companyID,
 		TargetType: audit.TargetCharge,
 		TargetID:   audit.ID(chargeID),
-		Summary:    "WhatsApp no se pudo entregar",
+		Summary:    summary,
 		Meta:       meta,
 	})
 }

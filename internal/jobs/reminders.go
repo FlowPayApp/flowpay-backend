@@ -211,11 +211,13 @@ func runOnce(ctx context.Context, repo *repository.DB, d *notify.Dispatcher, com
 func (s sender) send(ctx context.Context, ch repository.Charge, channel, kind, phase, subject, body, payURL string) {
 	log.Println("[FlowPay Job]", subject)
 	if shouldSendEmail(channel) && s.allowEmail && s.mailbox != nil {
-		if sendCompanyEmail(s.d, ch, subject, body, s.mailbox) {
+		if err := sendCompanyEmail(s.d, ch, subject, body, s.mailbox); err != nil {
+			recordReminderFailed(ctx, s.repo, ch, kind, "email", err)
+		} else {
 			emailMessage := fmt.Sprintf("Asunto: %s\n\n%s", subject, body)
 			if _, err := s.repo.InsertReminder(ctx, ch.ID, kind, "email", "sent", emailMessage, ptrNow()); err != nil {
 				log.Println("[FlowPay Job] insert reminder:", err)
-			} else if err := s.repo.RecordAudit(ctx, audit.Event{
+			} else if auditErr := s.repo.RecordAudit(ctx, audit.Event{
 				Domain:     audit.DomainMessage,
 				Action:     audit.ActionReminderSent,
 				ActorRole:  "system",
@@ -224,19 +226,17 @@ func (s sender) send(ctx context.Context, ch repository.Charge, channel, kind, p
 				TargetID:   audit.ID(ch.ID),
 				Summary:    "Recordatorio automático por correo",
 				Meta:       map[string]any{"channel": "email", "kind": kind},
-			}); err != nil {
-				log.Printf("[FlowPay audit] message.reminder_sent: %v", err)
+			}); auditErr != nil {
+				log.Printf("[FlowPay audit] message.reminder_sent: %v", auditErr)
 			}
-		} else if s.d != nil {
-			recordReminderFailed(ctx, s.repo, ch, kind, "email")
 		}
 	}
 	if shouldSendWhatsApp(channel) && s.allowWhatsApp && strings.TrimSpace(s.waFrom) != "" {
-		preview, sent, ok, failed := sendCompanyWhatsAppTemplate(s.d, ch, s.waFrom, phase, payURL)
-		if ok {
+		preview, sent, err := sendCompanyWhatsAppTemplate(s.d, ch, s.waFrom, phase, payURL)
+		if err != nil {
+			recordReminderFailed(ctx, s.repo, ch, kind, "whatsapp", err)
+		} else {
 			saveWhatsAppReminder(ctx, s.repo, ch.CompanyID, ch.ID, kind, preview, sent)
-		} else if failed {
-			recordReminderFailed(ctx, s.repo, ch, kind, "whatsapp")
 		}
 	}
 }
@@ -324,25 +324,22 @@ func companyMailbox(ctx context.Context, repo *repository.DB, companyID int64, s
 	return cfg
 }
 
-func sendCompanyEmail(d *notify.Dispatcher, ch repository.Charge, subject, body string, mailbox *notify.SMTPConfig) bool {
+func sendCompanyEmail(d *notify.Dispatcher, ch repository.Charge, subject, body string, mailbox *notify.SMTPConfig) error {
 	if d == nil {
-		return true
+		return nil
 	}
-	if err := d.SendReminderEmailFrom(ch, subject, body, mailbox); err != nil {
+	err := d.SendReminderEmailFrom(ch, subject, body, mailbox)
+	if err != nil {
 		log.Println("[FlowPay Job] correo:", err)
-		return false
 	}
-	return true
+	return err
 }
 
-func recordReminderFailed(ctx context.Context, repo *repository.DB, ch repository.Charge, kind, channel string) {
+func recordReminderFailed(ctx context.Context, repo *repository.DB, ch repository.Charge, kind, channel string, cause error) {
 	if repo == nil {
 		return
 	}
-	summary := "No se pudo enviar el recordatorio por correo"
-	if channel == "whatsapp" {
-		summary = "No se pudo enviar el recordatorio por WhatsApp"
-	}
+	summary, meta := audit.ReminderFailure(kind, channel, cause)
 	if err := repo.RecordAudit(ctx, audit.Event{
 		Domain:     audit.DomainMessage,
 		Action:     audit.ActionReminderFailed,
@@ -352,30 +349,30 @@ func recordReminderFailed(ctx context.Context, repo *repository.DB, ch repositor
 		TargetType: audit.TargetCharge,
 		TargetID:   audit.ID(ch.ID),
 		Summary:    summary,
-		Meta:       map[string]any{"channel": channel, "kind": kind},
+		Meta:       meta,
 	}); err != nil {
 		log.Printf("[FlowPay audit] message.reminder_failed: %v", err)
 	}
 }
 
-func sendCompanyWhatsAppTemplate(d *notify.Dispatcher, ch repository.Charge, from, phase, payURL string) (string, notify.SentWhatsApp, bool, bool) {
+func sendCompanyWhatsAppTemplate(d *notify.Dispatcher, ch repository.Charge, from, phase, payURL string) (string, notify.SentWhatsApp, error) {
 	msg, ok := notify.BuildWhatsAppTemplate(phase, ch, payURL, notify.TemplateSIDs{})
 	if !ok {
 		log.Println("[FlowPay Job] WhatsApp: fase sin plantilla", phase)
-		return "", notify.SentWhatsApp{}, false, false
+		return "", notify.SentWhatsApp{}, fmt.Errorf("no hay plantilla de WhatsApp para esta fase")
 	}
 	if d == nil {
-		return msg.Preview, notify.SentWhatsApp{}, true, false
+		return msg.Preview, notify.SentWhatsApp{}, nil
 	}
 	preview, sent, err := d.SendCompanyWhatsAppTemplate(ch, from, phase, payURL)
 	if err != nil {
 		log.Println("[FlowPay Job] WhatsApp:", err)
-		return "", notify.SentWhatsApp{}, false, true
+		return "", notify.SentWhatsApp{}, err
 	}
 	if preview == "" {
 		preview = msg.Preview
 	}
-	return preview, sent, true, false
+	return preview, sent, nil
 }
 
 func saveWhatsAppReminder(ctx context.Context, repo *repository.DB, companyID, chargeID int64, kind, preview string, sent notify.SentWhatsApp) {

@@ -118,18 +118,18 @@ func (d *Deps) ConfirmPaymentCredentialChange(c *gin.Context) {
 }
 
 func (d *Deps) noteCredentialLink(c *gin.Context, err error) {
-	reason := ""
+	code, reason := "", ""
 	switch {
 	case errors.Is(err, service.ErrCredentialExpired):
-		reason = "expired"
+		code, reason = "expired", "el enlace venció"
 	case errors.Is(err, service.ErrCredentialUsed):
-		reason = "used"
+		code, reason = "used", "el enlace ya se usó"
 	case errors.Is(err, service.ErrCredentialLink):
-		reason = "unknown"
+		code, reason = "unknown", "el enlace no existe"
 	default:
 		return
 	}
-	if d == nil || d.Svc == nil || !audit.Once("credential-link:"+c.ClientIP()+":"+reason, 10*time.Minute) {
+	if d == nil || d.Svc == nil || !audit.Once("credential-link:"+audit.RequestIP(c)+":"+code, 10*time.Minute) {
 		return
 	}
 	d.Svc.Record(c.Request.Context(), audit.Event{
@@ -137,8 +137,8 @@ func (d *Deps) noteCredentialLink(c *gin.Context, err error) {
 		Action:    audit.ActionCredentialLinkRejected,
 		Outcome:   audit.OutcomeDenied,
 		ActorRole: "public",
-		Summary:   "Enlace de confirmación de credenciales rechazado",
-		Meta:      map[string]any{"reason": reason},
+		Summary:   "Enlace de confirmación de credenciales rechazado: " + reason,
+		Meta:      map[string]any{"code": code, "reason": reason},
 	})
 }
 

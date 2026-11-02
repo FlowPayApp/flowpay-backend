@@ -334,12 +334,13 @@ func (s *Service) SendReminderNow(ctx context.Context, companyID, chargeID, memb
 	if sendEmail {
 		mailbox = s.CompanySMTP(ctx, companyID)
 		if mailbox == nil {
+			s.recordReminderFailed(ctx, companyID, chargeID, "email", ErrCompanyMailboxMissing)
 			return ErrCompanyMailboxMissing
 		}
 	}
 	if sendEmail && s.Notify != nil {
 		if err := s.Notify.SendReminderEmailFrom(*ch, subj, textBody, mailbox); err != nil {
-			s.recordReminderFailed(ctx, companyID, chargeID, "email")
+			s.recordReminderFailed(ctx, companyID, chargeID, "email", err)
 			return err
 		}
 	}
@@ -355,12 +356,13 @@ func (s *Service) SendReminderNow(ctx context.Context, companyID, chargeID, memb
 			return ferr
 		}
 		if ferr != nil || strings.TrimSpace(from) == "" {
+			s.recordReminderFailed(ctx, companyID, chargeID, "whatsapp", ErrCompanyWhatsAppMissing)
 			return ErrCompanyWhatsAppMissing
 		}
 		if s.Notify != nil {
 			preview, sent, err := s.Notify.SendCompanyWhatsAppTemplate(*ch, from, phase, payURL)
 			if err != nil {
-				s.recordReminderFailed(ctx, companyID, chargeID, "whatsapp")
+				s.recordReminderFailed(ctx, companyID, chargeID, "whatsapp", err)
 				return err
 			}
 			if preview != "" {
