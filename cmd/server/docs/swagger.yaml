@@ -1,0 +1,1966 @@
+basePath: /
+definitions:
+  controller.companyMailboxBody:
+    properties:
+      from_email:
+        type: string
+      from_name:
+        type: string
+      smtp_host:
+        type: string
+      smtp_password:
+        type: string
+      smtp_port:
+        type: string
+      smtp_username:
+        type: string
+    type: object
+  controller.companyWhatsAppBody:
+    properties:
+      phone_number:
+        example: "+56912345678"
+        type: string
+    type: object
+  controller.errorResponse:
+    properties:
+      error:
+        example: not found
+        type: string
+    type: object
+  controller.idResponse:
+    properties:
+      id:
+        example: 42
+        type: integer
+    type: object
+  controller.okResponse:
+    properties:
+      ok:
+        example: true
+        type: boolean
+    type: object
+  controller.rejectPaymentPortalBody:
+    properties:
+      reason:
+        type: string
+    type: object
+  controller.reminderCooldownResponse:
+    properties:
+      available_at:
+        example: "2026-11-02T15:04:05Z"
+        type: string
+      channel:
+        example: whatsapp
+        type: string
+      error:
+        type: string
+    type: object
+  controller.replyWhatsAppBody:
+    properties:
+      text:
+        type: string
+    type: object
+  controller.sendReminderBody:
+    properties:
+      channels:
+        items:
+          type: string
+        type: array
+    type: object
+  controller.simulateInboundBody:
+    properties:
+      text:
+        type: string
+    type: object
+  domain.ReminderPolicy:
+    properties:
+      days_before:
+        description: DaysBefore días antes del vencimiento en que se avisa; 0 es el
+          mismo día del vencimiento.
+        items:
+          type: integer
+        type: array
+      overdue_every:
+        description: OverdueEvery cada cuántos días se insiste con un cobro vencido.
+        type: integer
+      overdue_max:
+        description: 'OverdueMax tope de avisos con el cobro vencido: 0 ninguno, OverdueUnlimited
+          sin tope.'
+        type: integer
+    type: object
+  model.CompanyMailbox:
+    properties:
+      company_id:
+        type: integer
+      from_email:
+        type: string
+      from_name:
+        type: string
+      id:
+        type: integer
+      password_set:
+        type: boolean
+      smtp_host:
+        type: string
+      smtp_port:
+        type: string
+      smtp_username:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  model.Inbox:
+    properties:
+      threads:
+        items:
+          $ref: '#/definitions/model.UnreadThread'
+        type: array
+      total:
+        type: integer
+    type: object
+  model.Message:
+    properties:
+      charge_id:
+        type: integer
+      company_id:
+        type: integer
+      content:
+        type: string
+      created_at:
+        type: string
+      delivery_error:
+        type: string
+      direction:
+        type: string
+      from_number:
+        type: string
+      id:
+        type: integer
+      media:
+        items:
+          $ref: '#/definitions/model.MessageMedia'
+        type: array
+      read_at:
+        type: string
+      status:
+        description: 'Status en los enviados sigue la entrega en Twilio: queued, sent,
+          delivered, read, failed, undelivered.'
+        type: string
+      to_number:
+        type: string
+    type: object
+  model.MessageMedia:
+    properties:
+      content_type:
+        type: string
+      file_name:
+        type: string
+    type: object
+  model.UnreadThread:
+    properties:
+      charge_id:
+        type: integer
+      client_name:
+        type: string
+      has_media:
+        type: boolean
+      last_at:
+        type: string
+      preview:
+        type: string
+      unread:
+        type: integer
+    type: object
+  model.WhatsAppNumber:
+    properties:
+      company_id:
+        type: integer
+      created_at:
+        type: string
+      id:
+        type: integer
+      phone_number:
+        type: string
+      status:
+        type: string
+      twilio_sid:
+        type: string
+    type: object
+  repository.CompanyOverviewRow:
+    properties:
+      company_id:
+        type: integer
+      company_name:
+        type: string
+      overdue_amount:
+        type: number
+      owed_amount:
+        type: number
+      paid_amount:
+        type: number
+      pending_amount:
+        type: number
+    type: object
+  repository.DashboardTotals:
+    properties:
+      overdue_amount:
+        type: number
+      overdue_count:
+        type: integer
+      paid_amount:
+        type: number
+      paid_count:
+        type: integer
+      pending_amount:
+        type: number
+      pending_count:
+        type: integer
+    type: object
+  repository.Reminder:
+    properties:
+      channel:
+        type: string
+      charge_id:
+        type: integer
+      created_at:
+        type: string
+      delivery_error:
+        type: string
+      delivery_status:
+        description: 'DeliveryStatus solo en WhatsApp: lo que Twilio informa de la
+          entrega. Vacío si no hay seguimiento.'
+        type: string
+      id:
+        type: integer
+      kind:
+        type: string
+      message:
+        type: string
+      sent_at:
+        type: string
+      status:
+        type: string
+    type: object
+  repository.ReminderTemplateRow:
+    properties:
+      body:
+        type: string
+      company_id:
+        type: integer
+      day_max:
+        type: integer
+      day_min:
+        type: integer
+      email_subject:
+        type: string
+      id:
+        type: integer
+      phase:
+        type: string
+      sort_order:
+        type: integer
+      whatsapp_body:
+        type: string
+    type: object
+  service.ChargeDTO:
+    properties:
+      amount:
+        type: number
+      attachment_ext:
+        type: string
+      attachment_token:
+        description: Adjunto (PDF/imagen) para enviar por WhatsApp; token sirve para
+          URL pública.
+        type: string
+      client_email:
+        type: string
+      client_followup_channel:
+        type: string
+      client_id:
+        type: integer
+      client_name:
+        description: 'en UI de cobros: solo nombre de sucursal (ver chargeClientLabelExpr)'
+        type: string
+      client_phone:
+        type: string
+      company_id:
+        type: integer
+      company_reminder_policy:
+        allOf:
+        - $ref: '#/definitions/domain.ReminderPolicy'
+        description: CompanyReminderPolicy la de la empresa, para volver a ella desde
+          una personalizada.
+      created_at:
+        type: string
+      due_date:
+        type: string
+      id:
+        type: integer
+      next_reminder_at:
+        additionalProperties:
+          type: string
+        description: 'NextReminderAt solo en el detalle: canales que siguen en espera
+          y desde cuándo se puede volver a enviar.'
+        type: object
+      paid_at:
+        type: string
+      reminder_channel:
+        type: string
+      reminder_mode:
+        description: 'Solo en el detalle: recordatorios automáticos. ReminderPolicy
+          es la que rige (la propia o la de la empresa).'
+        type: string
+      reminder_policy:
+        $ref: '#/definitions/domain.ReminderPolicy'
+      status:
+        type: string
+    type: object
+  service.CompanyChannels:
+    properties:
+      email:
+        type: boolean
+      whatsapp:
+        type: boolean
+    type: object
+  service.CreateChargeInput:
+    properties:
+      amount:
+        type: number
+      client_id:
+        type: integer
+      due_date:
+        type: string
+      reminder_channel:
+        type: string
+      reminder_mode:
+        type: string
+      reminder_policy:
+        $ref: '#/definitions/domain.ReminderPolicy'
+    type: object
+  service.CredentialChangePreview:
+    properties:
+      action:
+        type: string
+      action_label:
+        type: string
+      action_verb:
+        type: string
+      company:
+        type: string
+      expires_at:
+        type: string
+      provider:
+        type: string
+      provider_label:
+        type: string
+    type: object
+  service.CredentialChangeReceipt:
+    properties:
+      action:
+        type: string
+      pending:
+        type: boolean
+      provider:
+        type: string
+      sent_to:
+        type: string
+    type: object
+  service.DashboardResponse:
+    properties:
+      charges_needing_attention:
+        items:
+          $ref: '#/definitions/service.ChargeDTO'
+        type: array
+      product_name:
+        type: string
+      tagline:
+        type: string
+      totals:
+        $ref: '#/definitions/repository.DashboardTotals'
+    type: object
+  service.MessagingPhaseDefaults:
+    properties:
+      email_body:
+        type: string
+      email_subject:
+        type: string
+      whatsapp:
+        type: string
+    type: object
+  service.MessagingSettingsResponse:
+    properties:
+      defaults:
+        additionalProperties:
+          $ref: '#/definitions/service.MessagingPhaseDefaults'
+        description: |-
+          Defaults lo que recibe el cliente en cada fase con un cobro de ejemplo: la plantilla de WhatsApp
+          aprobada (no editable) y el correo del sistema que se usa si la empresa no escribe el suyo.
+        type: object
+      payment_url_template:
+        type: string
+      reminder_policy:
+        $ref: '#/definitions/domain.ReminderPolicy'
+      send_time:
+        description: SendTime hora diaria (HH:MM, hora de Chile por defecto) del ciclo
+          de recordatorios automáticos.
+        type: string
+      templates:
+        items:
+          $ref: '#/definitions/repository.ReminderTemplateRow'
+        type: array
+      transfer_instructions:
+        type: string
+    type: object
+  service.MessagingTemplateInput:
+    properties:
+      body:
+        type: string
+      day_max:
+        type: integer
+      day_min:
+        type: integer
+      email_subject:
+        type: string
+      phase:
+        type: string
+      sort_order:
+        type: integer
+      whatsapp_body:
+        type: string
+    type: object
+  service.PatchChargeInput:
+    properties:
+      amount:
+        type: number
+      client_id:
+        type: integer
+      due_date:
+        type: string
+      reminder_channel:
+        type: string
+      reminder_mode:
+        type: string
+      reminder_policy:
+        $ref: '#/definitions/domain.ReminderPolicy'
+      set_paid:
+        type: boolean
+    type: object
+  service.PaymentCredentialStatus:
+    properties:
+      fintoc:
+        type: boolean
+      khipu:
+        type: boolean
+      oneclick:
+        type: boolean
+      pending:
+        items:
+          $ref: '#/definitions/service.PendingCredentialChange'
+        type: array
+      transfer_gateway:
+        type: string
+      webpay:
+        type: boolean
+    type: object
+  service.PaymentPortalView:
+    properties:
+      mode:
+        type: string
+      pending_url:
+        type: string
+      rejection:
+        type: string
+      url:
+        type: string
+    type: object
+  service.PendingCredentialChange:
+    properties:
+      action:
+        type: string
+      expires_at:
+        type: string
+      provider:
+        type: string
+      sent_to:
+        type: string
+    type: object
+  service.PendingPaymentPortalView:
+    properties:
+      company_id:
+        type: integer
+      company_name:
+        type: string
+      mode:
+        type: string
+      pending_at:
+        type: string
+      pending_url:
+        type: string
+      url:
+        type: string
+    type: object
+  service.PlatformOverviewResponse:
+    properties:
+      companies:
+        items:
+          $ref: '#/definitions/repository.CompanyOverviewRow'
+        type: array
+      total_companies:
+        type: integer
+      total_overdue:
+        type: number
+      total_owed:
+        type: number
+      total_paid:
+        type: number
+      total_pending:
+        type: number
+    type: object
+  service.SaveMessagingInput:
+    properties:
+      payment_url_template:
+        type: string
+      reminder_policy:
+        allOf:
+        - $ref: '#/definitions/domain.ReminderPolicy'
+        description: ReminderPolicy nula deja la frecuencia como está.
+      templates:
+        items:
+          $ref: '#/definitions/service.MessagingTemplateInput'
+        type: array
+      transfer_instructions:
+        type: string
+    type: object
+  service.SavePaymentCredentialsInput:
+    properties:
+      fintoc_secret_key:
+        type: string
+      fintoc_webhook_secret:
+        type: string
+      khipu_api_key:
+        type: string
+      oneclick_api_key:
+        type: string
+      oneclick_mall_code:
+        type: string
+      oneclick_store_code:
+        type: string
+      transfer_gateway:
+        type: string
+      webpay_api_key:
+        type: string
+      webpay_commerce_code:
+        type: string
+    type: object
+  service.SavePaymentPortalInput:
+    properties:
+      mode:
+        type: string
+      url:
+        type: string
+    type: object
+info:
+  contact: {}
+  description: 'Aplicación principal de FlowPay: gestión de empresas, clientes, recordatorios,
+    pagos y notificaciones.'
+  title: FlowPay Backend API
+  version: "1.0"
+paths:
+  /api/charges:
+    get:
+      description: Cobros de la empresa del token. Un member solo ve los de su cartera.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/service.ChargeDTO'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Listar cobros
+      tags:
+      - Cobros
+    post:
+      consumes:
+      - application/json
+      description: due_date en formato YYYY-MM-DD.
+      parameters:
+      - description: Datos del cobro
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/service.CreateChargeInput'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/controller.idResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Crear cobro
+      tags:
+      - Cobros
+  /api/charges/{id}:
+    delete:
+      description: Solo el administrador de la empresa.
+      parameters:
+      - description: ID del cobro
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/controller.okResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Eliminar cobro
+      tags:
+      - Cobros
+    get:
+      parameters:
+      - description: ID del cobro
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.ChargeDTO'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Obtener cobro
+      tags:
+      - Cobros
+    patch:
+      consumes:
+      - application/json
+      description: Campos opcionales. set_paid true marca cobrado hoy; false lo reabre
+        y quita los pagos. Devuelve el cobro actualizado.
+      parameters:
+      - description: ID del cobro
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Campos a cambiar
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/service.PatchChargeInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.ChargeDTO'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Actualizar cobro
+      tags:
+      - Cobros
+  /api/charges/{id}/attachment:
+    post:
+      consumes:
+      - multipart/form-data
+      description: PDF o imagen (máx. 8 MB) que se envía junto a los recordatorios
+        por WhatsApp.
+      parameters:
+      - description: ID del cobro
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Archivo
+        in: formData
+        name: file
+        required: true
+        type: file
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/controller.okResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Subir adjunto del cobro
+      tags:
+      - Cobros
+  /api/charges/{id}/inbound-whatsapp:
+    get:
+      parameters:
+      - description: ID del cobro
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.Message'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Mensajes de WhatsApp del cobro
+      tags:
+      - WhatsApp
+  /api/charges/{id}/inbound-whatsapp/{msgId}/media/{index}:
+    get:
+      description: Imágenes, PDF, audio y video se muestran inline; el resto se entrega
+        como descarga.
+      parameters:
+      - description: ID del cobro
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: ID del mensaje
+        in: path
+        name: msgId
+        required: true
+        type: integer
+      - description: Índice del adjunto (desde 0)
+        in: path
+        name: index
+        required: true
+        type: integer
+      produces:
+      - application/octet-stream
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: file
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Descargar adjunto recibido por WhatsApp
+      tags:
+      - WhatsApp
+  /api/charges/{id}/inbound-whatsapp/simulate:
+    post:
+      consumes:
+      - application/json
+      description: Solo disponible si FLOWPAY_ALLOW_WHATSAPP_SIMULATE está activo
+        (desarrollo).
+      parameters:
+      - description: ID del cobro
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Texto
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/controller.simulateInboundBody'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.Message'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Simular mensaje entrante
+      tags:
+      - WhatsApp
+  /api/charges/{id}/read:
+    post:
+      parameters:
+      - description: ID del cobro
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/controller.okResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Marcar conversación como leída
+      tags:
+      - Bandeja
+  /api/charges/{id}/reminders:
+    get:
+      description: Recordatorios enviados para el cobro (línea de tiempo).
+      parameters:
+      - description: ID del cobro
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/repository.Reminder'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Historial de recordatorios
+      tags:
+      - Cobros
+    post:
+      consumes:
+      - application/json
+      description: Body opcional. Sin channels usa los medios configurados para el
+        cobro. Responde 429 si el canal sigue en espera.
+      parameters:
+      - description: ID del cobro
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Canales (email, whatsapp)
+        in: body
+        name: body
+        schema:
+          $ref: '#/definitions/controller.sendReminderBody'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/controller.okResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/controller.reminderCooldownResponse'
+      security:
+      - BearerAuth: []
+      summary: Enviar recordatorio ahora
+      tags:
+      - Cobros
+  /api/charges/{id}/whatsapp:
+    post:
+      consumes:
+      - application/json
+      description: Solo dentro de la ventana de 24 h desde el último mensaje del cliente
+        (409 si no).
+      parameters:
+      - description: ID del cobro
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Texto
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/controller.replyWhatsAppBody'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.Message'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Responder por WhatsApp
+      tags:
+      - WhatsApp
+  /api/charges/{id}/whatsapp/file:
+    post:
+      consumes:
+      - multipart/form-data
+      parameters:
+      - description: ID del cobro
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Archivo
+        in: formData
+        name: file
+        required: true
+        type: file
+      - description: Texto que acompaña al archivo
+        in: formData
+        name: text
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.Message'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Enviar archivo por WhatsApp
+      tags:
+      - WhatsApp
+  /api/company/channels:
+    get:
+      description: Qué canales (correo, WhatsApp) dejó habilitados el superadmin.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.CompanyChannels'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Medios de aviso asignados
+      tags:
+      - Empresa
+  /api/company/clients/export:
+    get:
+      produces:
+      - text/csv
+      responses:
+        "200":
+          description: clientes.csv
+          schema:
+            type: file
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Exportar clientes (CSV)
+      tags:
+      - Empresa
+  /api/company/messaging:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.MessagingSettingsResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Configuración de mensajes
+      tags:
+      - Empresa
+    put:
+      consumes:
+      - application/json
+      description: Solo el administrador de la empresa. reminder_policy nula deja
+        la frecuencia como está.
+      parameters:
+      - description: Configuración
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/service.SaveMessagingInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/controller.okResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Guardar configuración de mensajes
+      tags:
+      - Empresa
+  /api/company/payment-credentials:
+    get:
+      description: Indica qué credenciales están configuradas, sin revelar su valor.
+        Solo el administrador de la empresa.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.PaymentCredentialStatus'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Estado de credenciales de pago
+      tags:
+      - Empresa
+    put:
+      consumes:
+      - application/json
+      description: Un campo ausente no se toca, vacío lo borra. El cambio se aplica
+        al confirmarlo desde el enlace enviado por correo.
+      parameters:
+      - description: Credenciales
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/service.SavePaymentCredentialsInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.CredentialChangeReceipt'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Solicitar cambio de credenciales de pago
+      tags:
+      - Empresa
+  /api/company/payment-portal:
+    get:
+      description: Solo el administrador de la empresa.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.PaymentPortalView'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Enlace de pago de la empresa
+      tags:
+      - Empresa
+    put:
+      consumes:
+      - application/json
+      description: Elige el portal de FlowPay o propone una URL propia, que queda
+        pendiente de aprobación.
+      parameters:
+      - description: Modo y URL
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/service.SavePaymentPortalInput'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.PaymentPortalView'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Guardar enlace de pago
+      tags:
+      - Empresa
+  /api/dashboard:
+    get:
+      description: Métricas de la empresa del token.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.DashboardResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Dashboard de cobranza
+      tags:
+      - Dashboard
+  /api/inbox:
+    get:
+      description: Conversaciones de WhatsApp de los cobros con mensajes recientes.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.Inbox'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Bandeja de entrada
+      tags:
+      - Bandeja
+  /api/platform/companies/{id}/mailbox:
+    put:
+      consumes:
+      - application/json
+      description: Solo platform_admin.
+      parameters:
+      - description: ID de la empresa
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Casilla SMTP
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/controller.companyMailboxBody'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.CompanyMailbox'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Configurar casilla SMTP de una empresa
+      tags:
+      - Plataforma
+  /api/platform/companies/{id}/payment-portal/approve:
+    post:
+      description: Solo platform_admin.
+      parameters:
+      - description: ID de la empresa
+        in: path
+        name: id
+        required: true
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/controller.okResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Aprobar enlace de pago
+      tags:
+      - Plataforma
+  /api/platform/companies/{id}/payment-portal/reject:
+    post:
+      consumes:
+      - application/json
+      description: Solo platform_admin.
+      parameters:
+      - description: ID de la empresa
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Motivo
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/controller.rejectPaymentPortalBody'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/controller.okResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Rechazar enlace de pago
+      tags:
+      - Plataforma
+  /api/platform/companies/{id}/whatsapp:
+    put:
+      consumes:
+      - application/json
+      description: Solo platform_admin. phone_number vacío quita la asignación.
+      parameters:
+      - description: ID de la empresa
+        in: path
+        name: id
+        required: true
+        type: integer
+      - description: Número
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/controller.companyWhatsAppBody'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.WhatsAppNumber'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Asignar número de WhatsApp a una empresa
+      tags:
+      - Plataforma
+  /api/platform/mailboxes:
+    get:
+      description: Solo platform_admin.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.CompanyMailbox'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Casillas de correo de las empresas
+      tags:
+      - Plataforma
+  /api/platform/overview:
+    get:
+      description: Solo platform_admin.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.PlatformOverviewResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Resumen de la plataforma
+      tags:
+      - Plataforma
+  /api/platform/payment-portals:
+    get:
+      description: Solo platform_admin.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/service.PendingPaymentPortalView'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Enlaces de pago pendientes de revisión
+      tags:
+      - Plataforma
+  /api/platform/whatsapp-numbers:
+    get:
+      description: Solo platform_admin.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.WhatsAppNumber'
+            type: array
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      security:
+      - BearerAuth: []
+      summary: Números de WhatsApp activos
+      tags:
+      - Plataforma
+  /api/public/attachments/{token}:
+    get:
+      description: Enlace que recibe el cliente. Con download=1 se fuerza la descarga.
+      parameters:
+      - description: Token del adjunto
+        in: path
+        name: token
+        required: true
+        type: string
+      - description: 1 para descargar
+        in: query
+        name: download
+        type: string
+      produces:
+      - application/octet-stream
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: file
+        "404":
+          description: Not Found
+      summary: Descargar adjunto de un cobro (público)
+      tags:
+      - Público
+  /api/public/chat-files/{token}/{name}:
+    get:
+      description: Lo descarga Twilio para entregar el archivo. El token vence en
+        24 horas.
+      parameters:
+      - description: Token del archivo
+        in: path
+        name: token
+        required: true
+        type: string
+      - description: Nombre del archivo
+        in: path
+        name: name
+        required: true
+        type: string
+      produces:
+      - application/octet-stream
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: file
+        "404":
+          description: Not Found
+      summary: Archivo de chat (público)
+      tags:
+      - Público
+  /api/public/credential-confirm/{token}:
+    get:
+      description: Página de confirmación enlazada desde el correo.
+      parameters:
+      - description: Token de confirmación
+        in: path
+        name: token
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.CredentialChangePreview'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "410":
+          description: Gone
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      summary: Ver cambio de credenciales pendiente
+      tags:
+      - Público
+    post:
+      parameters:
+      - description: Token de confirmación
+        in: path
+        name: token
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/service.CredentialChangePreview'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "410":
+          description: Gone
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/controller.errorResponse'
+      summary: Confirmar cambio de credenciales
+      tags:
+      - Público
+  /api/webhooks/twilio/status:
+    post:
+      consumes:
+      - application/x-www-form-urlencoded
+      description: StatusCallback de Twilio. Siempre exige la firma.
+      parameters:
+      - description: Firma de Twilio
+        in: header
+        name: X-Twilio-Signature
+        required: true
+        type: string
+      - description: SID del mensaje
+        in: formData
+        name: MessageSid
+        required: true
+        type: string
+      - description: Estado (sent, delivered, read, failed...)
+        in: formData
+        name: MessageStatus
+        required: true
+        type: string
+      - description: Código de error
+        in: formData
+        name: ErrorCode
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          description: Bad Request
+        "403":
+          description: Forbidden
+        "500":
+          description: Internal Server Error
+      summary: Webhook de estado de entrega de WhatsApp
+      tags:
+      - Webhooks
+  /api/webhooks/twilio/whatsapp:
+    post:
+      consumes:
+      - application/x-www-form-urlencoded
+      description: Lo llama Twilio. Exige X-Twilio-Signature cuando FLOWPAY_TWILIO_VALIDATE_WEBHOOK
+        está activo.
+      parameters:
+      - description: Firma de Twilio
+        in: header
+        name: X-Twilio-Signature
+        type: string
+      - description: Remitente (whatsapp:+56...)
+        in: formData
+        name: From
+        required: true
+        type: string
+      - description: Número de la empresa
+        in: formData
+        name: To
+        required: true
+        type: string
+      - description: Texto
+        in: formData
+        name: Body
+        type: string
+      - description: Cantidad de adjuntos
+        in: formData
+        name: NumMedia
+        type: integer
+      responses:
+        "200":
+          description: OK
+        "400":
+          description: Bad Request
+        "403":
+          description: Forbidden
+        "500":
+          description: Internal Server Error
+      summary: Webhook de mensajes entrantes de WhatsApp
+      tags:
+      - Webhooks
+  /health:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Estado del servicio
+      tags:
+      - Salud
+securityDefinitions:
+  BearerAuth:
+    description: Token JWT con formato Bearer {token}
+    in: header
+    name: Authorization
+    type: apiKey
+swagger: "2.0"

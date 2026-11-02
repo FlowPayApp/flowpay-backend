@@ -11,6 +11,16 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// @Summary		Estado de credenciales de pago
+// @Description	Indica qué credenciales están configuradas, sin revelar su valor. Solo el administrador de la empresa.
+// @Tags			Empresa
+// @Produce		json
+// @Security		BearerAuth
+// @Success		200	{object}	service.PaymentCredentialStatus
+// @Failure		403	{object}	errorResponse
+// @Failure		500	{object}	errorResponse
+// @Failure		401	{object}	errorResponse
+// @Router			/api/company/payment-credentials [get]
 func (d *Deps) GetPaymentCredentials(c *gin.Context) {
 	if !d.requireCompanyAdmin(c) {
 		return
@@ -24,6 +34,20 @@ func (d *Deps) GetPaymentCredentials(c *gin.Context) {
 	c.JSON(http.StatusOK, out)
 }
 
+// @Summary		Solicitar cambio de credenciales de pago
+// @Description	Un campo ausente no se toca, vacío lo borra. El cambio se aplica al confirmarlo desde el enlace enviado por correo.
+// @Tags			Empresa
+// @Accept			json
+// @Produce		json
+// @Security		BearerAuth
+// @Param			body	body		service.SavePaymentCredentialsInput	true	"Credenciales"
+// @Success		200		{object}	service.CredentialChangeReceipt
+// @Failure		400		{object}	errorResponse
+// @Failure		403		{object}	errorResponse
+// @Failure		500		{object}	errorResponse
+// @Failure		503		{object}	errorResponse
+// @Failure		401		{object}	errorResponse
+// @Router			/api/company/payment-credentials [put]
 func (d *Deps) PutPaymentCredentials(c *gin.Context) {
 	if !d.requireCompanyAdmin(c) {
 		return
@@ -49,6 +73,17 @@ func (d *Deps) PutPaymentCredentials(c *gin.Context) {
 	c.JSON(http.StatusOK, out)
 }
 
+// @Summary		Ver cambio de credenciales pendiente
+// @Description	Página de confirmación enlazada desde el correo.
+// @Tags			Público
+// @Produce		json
+// @Param			token	path		string	true	"Token de confirmación"
+// @Success		200		{object}	service.CredentialChangePreview
+// @Failure		404		{object}	errorResponse
+// @Failure		409		{object}	errorResponse
+// @Failure		410		{object}	errorResponse
+// @Failure		500		{object}	errorResponse
+// @Router			/api/public/credential-confirm/{token} [get]
 func (d *Deps) PreviewPaymentCredentialChange(c *gin.Context) {
 	out, err := d.Svc.PreviewCredentialConfirmation(c.Request.Context(), c.Param("token"))
 	if err != nil {
@@ -58,6 +93,17 @@ func (d *Deps) PreviewPaymentCredentialChange(c *gin.Context) {
 	c.JSON(http.StatusOK, out)
 }
 
+// @Summary	Confirmar cambio de credenciales
+// @Tags		Público
+// @Produce	json
+// @Param		token	path		string	true	"Token de confirmación"
+// @Success	200		{object}	service.CredentialChangePreview
+// @Failure	404		{object}	errorResponse
+// @Failure	409		{object}	errorResponse
+// @Failure	410		{object}	errorResponse
+// @Failure	500		{object}	errorResponse
+// @Failure	503		{object}	errorResponse
+// @Router		/api/public/credential-confirm/{token} [post]
 func (d *Deps) ConfirmPaymentCredentialChange(c *gin.Context) {
 	out, err := d.Svc.ConfirmCredentialChange(c.Request.Context(), c.Param("token"))
 	if err != nil {

@@ -13,6 +13,17 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// @Summary		Enlace de pago de la empresa
+// @Description	Solo el administrador de la empresa.
+// @Tags			Empresa
+// @Produce		json
+// @Security		BearerAuth
+// @Success		200	{object}	service.PaymentPortalView
+// @Failure		403	{object}	errorResponse
+// @Failure		404	{object}	errorResponse
+// @Failure		500	{object}	errorResponse
+// @Failure		401	{object}	errorResponse
+// @Router			/api/company/payment-portal [get]
 func (d *Deps) GetPaymentPortal(c *gin.Context) {
 	if !d.requireCompanyAdmin(c) {
 		return
@@ -25,6 +36,20 @@ func (d *Deps) GetPaymentPortal(c *gin.Context) {
 	c.JSON(http.StatusOK, out)
 }
 
+// @Summary		Guardar enlace de pago
+// @Description	Elige el portal de FlowPay o propone una URL propia, que queda pendiente de aprobación.
+// @Tags			Empresa
+// @Accept			json
+// @Produce		json
+// @Security		BearerAuth
+// @Param			body	body		service.SavePaymentPortalInput	true	"Modo y URL"
+// @Success		200		{object}	service.PaymentPortalView
+// @Failure		400		{object}	errorResponse
+// @Failure		403		{object}	errorResponse
+// @Failure		404		{object}	errorResponse
+// @Failure		500		{object}	errorResponse
+// @Failure		401		{object}	errorResponse
+// @Router			/api/company/payment-portal [put]
 func (d *Deps) PutPaymentPortal(c *gin.Context) {
 	if !d.requireCompanyAdmin(c) {
 		return
@@ -41,6 +66,16 @@ func (d *Deps) PutPaymentPortal(c *gin.Context) {
 	c.JSON(http.StatusOK, out)
 }
 
+// @Summary		Enlaces de pago pendientes de revisión
+// @Description	Solo platform_admin.
+// @Tags			Plataforma
+// @Produce		json
+// @Security		BearerAuth
+// @Success		200	{array}		service.PendingPaymentPortalView
+// @Failure		403	{object}	errorResponse
+// @Failure		500	{object}	errorResponse
+// @Failure		401	{object}	errorResponse
+// @Router			/api/platform/payment-portals [get]
 func (d *Deps) ListPendingPaymentPortals(c *gin.Context) {
 	if !d.isPlatformAdmin(c) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "sin permisos de platform_admin"})
@@ -54,6 +89,19 @@ func (d *Deps) ListPendingPaymentPortals(c *gin.Context) {
 	c.JSON(http.StatusOK, out)
 }
 
+// @Summary		Aprobar enlace de pago
+// @Description	Solo platform_admin.
+// @Tags			Plataforma
+// @Produce		json
+// @Security		BearerAuth
+// @Param			id	path		int	true	"ID de la empresa"
+// @Success		200	{object}	okResponse
+// @Failure		400	{object}	errorResponse
+// @Failure		403	{object}	errorResponse
+// @Failure		404	{object}	errorResponse
+// @Failure		500	{object}	errorResponse
+// @Failure		401	{object}	errorResponse
+// @Router			/api/platform/companies/{id}/payment-portal/approve [post]
 func (d *Deps) ApprovePaymentPortal(c *gin.Context) {
 	if !d.isPlatformAdmin(c) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "sin permisos de platform_admin"})
@@ -70,6 +118,25 @@ func (d *Deps) ApprovePaymentPortal(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
+type rejectPaymentPortalBody struct {
+	Reason string `json:"reason"`
+}
+
+// @Summary		Rechazar enlace de pago
+// @Description	Solo platform_admin.
+// @Tags			Plataforma
+// @Accept			json
+// @Produce		json
+// @Security		BearerAuth
+// @Param			id		path		int						true	"ID de la empresa"
+// @Param			body	body		rejectPaymentPortalBody	true	"Motivo"
+// @Success		200		{object}	okResponse
+// @Failure		400		{object}	errorResponse
+// @Failure		403		{object}	errorResponse
+// @Failure		404		{object}	errorResponse
+// @Failure		500		{object}	errorResponse
+// @Failure		401		{object}	errorResponse
+// @Router			/api/platform/companies/{id}/payment-portal/reject [post]
 func (d *Deps) RejectPaymentPortal(c *gin.Context) {
 	if !d.isPlatformAdmin(c) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "sin permisos de platform_admin"})
@@ -79,9 +146,7 @@ func (d *Deps) RejectPaymentPortal(c *gin.Context) {
 	if !ok {
 		return
 	}
-	var body struct {
-		Reason string `json:"reason"`
-	}
+	var body rejectPaymentPortalBody
 	if !decodePaymentPortalBody(c, &body) {
 		return
 	}

@@ -14,10 +14,13 @@ import (
 	"syscall"
 	"time"
 
+	_ "github.com/flowpay/flowpay-backend/cmd/server/docs"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "github.com/joho/godotenv/autoload"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 
 	"github.com/flowpay/flowpay-backend/internal/config"
 	"github.com/flowpay/flowpay-backend/internal/controller"
@@ -29,6 +32,14 @@ import (
 	"github.com/flowpay/flowpay-backend/internal/service"
 )
 
+// @title						FlowPay Backend API
+// @version					1.0
+// @description				Aplicación principal de FlowPay: gestión de empresas, clientes, recordatorios, pagos y notificaciones.
+// @BasePath					/
+// @securityDefinitions.apikey	BearerAuth
+// @in							header
+// @name						Authorization
+// @description				Token JWT con formato Bearer {token}
 func main() {
 	cfg := config.Load()
 	if config.Production() {
@@ -155,6 +166,9 @@ func main() {
 	}
 	routes.Register(r, deps, middleware.BearerJWT(cfg.JWTSecret, revokedList.Has), cfg.AllowWhatsAppSimulate)
 
+	if !config.Production() {
+		r.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+	}
 	jobs.StartReminderJob(ctx, repo, cfg.Notify, reminderSchedule, cfg.AppPublicURL, cfg.SMTPPasswordKey)
 
 	srv := &http.Server{Addr: cfg.Addr, Handler: r}

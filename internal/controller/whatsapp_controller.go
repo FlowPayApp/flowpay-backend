@@ -24,6 +24,16 @@ type TwilioWebhookDeps struct {
 	PublicBaseURLs []string
 }
 
+// @Summary		Números de WhatsApp activos
+// @Description	Solo platform_admin.
+// @Tags			Plataforma
+// @Produce		json
+// @Security		BearerAuth
+// @Success		200	{array}		model.WhatsAppNumber
+// @Failure		403	{object}	errorResponse
+// @Failure		500	{object}	errorResponse
+// @Failure		401	{object}	errorResponse
+// @Router			/api/platform/whatsapp-numbers [get]
 func (d *Deps) ListPlatformWhatsAppNumbers(c *gin.Context) {
 	if !d.isPlatformAdmin(c) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "sin permisos de platform_admin"})
@@ -44,6 +54,26 @@ func (d *Deps) ListPlatformWhatsAppNumbers(c *gin.Context) {
 	c.JSON(http.StatusOK, list)
 }
 
+type companyWhatsAppBody struct {
+	PhoneNumber string `json:"phone_number" example:"+56912345678"`
+}
+
+// @Summary		Asignar número de WhatsApp a una empresa
+// @Description	Solo platform_admin. phone_number vacío quita la asignación.
+// @Tags			Plataforma
+// @Accept			json
+// @Produce		json
+// @Security		BearerAuth
+// @Param			id		path		int					true	"ID de la empresa"
+// @Param			body	body		companyWhatsAppBody	true	"Número"
+// @Success		200		{object}	model.WhatsAppNumber
+// @Failure		400		{object}	errorResponse
+// @Failure		403		{object}	errorResponse
+// @Failure		404		{object}	errorResponse
+// @Failure		409		{object}	errorResponse
+// @Failure		500		{object}	errorResponse
+// @Failure		401		{object}	errorResponse
+// @Router			/api/platform/companies/{id}/whatsapp [put]
 func (d *Deps) PutCompanyWhatsApp(c *gin.Context) {
 	if !d.isPlatformAdmin(c) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "sin permisos de platform_admin"})
@@ -58,9 +88,7 @@ func (d *Deps) PutCompanyWhatsApp(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "empresa inválida"})
 		return
 	}
-	var body struct {
-		PhoneNumber string `json:"phone_number"`
-	}
+	var body companyWhatsAppBody
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "JSON inválido"})
 		return
@@ -86,6 +114,20 @@ func (d *Deps) PutCompanyWhatsApp(c *gin.Context) {
 	c.JSON(http.StatusOK, w)
 }
 
+// @Summary		Webhook de mensajes entrantes de WhatsApp
+// @Description	Lo llama Twilio. Exige X-Twilio-Signature cuando FLOWPAY_TWILIO_VALIDATE_WEBHOOK está activo.
+// @Tags			Webhooks
+// @Accept			x-www-form-urlencoded
+// @Param			X-Twilio-Signature	header		string	false	"Firma de Twilio"
+// @Param			From				formData	string	true	"Remitente (whatsapp:+56...)"
+// @Param			To					formData	string	true	"Número de la empresa"
+// @Param			Body				formData	string	false	"Texto"
+// @Param			NumMedia			formData	int		false	"Cantidad de adjuntos"
+// @Success		200
+// @Failure		400
+// @Failure		403
+// @Failure		500
+// @Router			/api/webhooks/twilio/whatsapp [post]
 func (d *Deps) TwilioWhatsAppWebhook(c *gin.Context) {
 	if err := c.Request.ParseForm(); err != nil {
 		log.Printf("[FlowPay WhatsApp] webhook parse form: %v", err)
@@ -166,6 +208,20 @@ func (d *Deps) twilioSignedURL(c *gin.Context, form url.Values) (string, bool) {
 
 // TwilioStatusWebhook recibe los avisos de entrega de los WhatsApp enviados (StatusCallback).
 // Siempre exige la firma de Twilio: sin ella cualquiera podría marcar mensajes como leídos.
+//
+//	@Summary		Webhook de estado de entrega de WhatsApp
+//	@Description	StatusCallback de Twilio. Siempre exige la firma.
+//	@Tags			Webhooks
+//	@Accept			x-www-form-urlencoded
+//	@Param			X-Twilio-Signature	header		string	true	"Firma de Twilio"
+//	@Param			MessageSid			formData	string	true	"SID del mensaje"
+//	@Param			MessageStatus		formData	string	true	"Estado (sent, delivered, read, failed...)"
+//	@Param			ErrorCode			formData	string	false	"Código de error"
+//	@Success		204
+//	@Failure		400
+//	@Failure		403
+//	@Failure		500
+//	@Router			/api/webhooks/twilio/status [post]
 func (d *Deps) TwilioStatusWebhook(c *gin.Context) {
 	if err := c.Request.ParseForm(); err != nil {
 		c.Status(http.StatusBadRequest)
@@ -237,6 +293,21 @@ func inlineMedia(contentType string) bool {
 	return inlineMediaTypes[base] || strings.HasPrefix(base, "audio/") || strings.HasPrefix(base, "video/")
 }
 
+// @Summary		Descargar adjunto recibido por WhatsApp
+// @Description	Imágenes, PDF, audio y video se muestran inline; el resto se entrega como descarga.
+// @Tags			WhatsApp
+// @Produce		octet-stream
+// @Security		BearerAuth
+// @Param			id		path		int	true	"ID del cobro"
+// @Param			msgId	path		int	true	"ID del mensaje"
+// @Param			index	path		int	true	"Índice del adjunto (desde 0)"
+// @Success		200		{file}		file
+// @Failure		400		{object}	errorResponse
+// @Failure		404		{object}	errorResponse
+// @Failure		500		{object}	errorResponse
+// @Failure		502		{object}	errorResponse
+// @Failure		401		{object}	errorResponse
+// @Router			/api/charges/{id}/inbound-whatsapp/{msgId}/media/{index} [get]
 func (d *Deps) ChargeInboundMedia(c *gin.Context) {
 	chargeID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
