@@ -441,3 +441,29 @@ WHERE provider_sid = $1 AND `+deliveryRank("delivery_status")+` < `+deliveryRank
 	m, _ := res.RowsAffected()
 	return n + m, nil
 }
+
+// DeliveryAuditTarget ubica empresa y cobro de un WhatsApp ya enviado, por el sid de Twilio.
+func (db *DB) DeliveryAuditTarget(ctx context.Context, sid string) (companyID, chargeID int64, err error) {
+	sid = strings.TrimSpace(sid)
+	if sid == "" {
+		return 0, 0, sql.ErrNoRows
+	}
+	err = db.db.QueryRowContext(ctx, `
+SELECT company_id, COALESCE(charge_id, 0)
+FROM messages
+WHERE provider_sid = $1
+LIMIT 1`, sid).Scan(&companyID, &chargeID)
+	if err == nil {
+		return companyID, chargeID, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, 0, err
+	}
+	err = db.db.QueryRowContext(ctx, `
+SELECT c.company_id, r.charge_id
+FROM reminders r
+JOIN charges c ON c.id = r.charge_id
+WHERE r.provider_sid = $1
+LIMIT 1`, sid).Scan(&companyID, &chargeID)
+	return companyID, chargeID, err
+}

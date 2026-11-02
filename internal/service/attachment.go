@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/flowpay/flowpay-backend/internal/audit"
 )
 
 const maxAttachmentBytes = 8 << 20 // 8 MiB
@@ -100,6 +102,15 @@ func (s *Service) SaveChargeAttachment(ctx context.Context, companyID, chargeID,
 		_ = os.Remove(dstPath)
 		return err
 	}
+	s.Record(ctx, audit.Event{
+		Domain:     audit.DomainMessage,
+		Action:     audit.ActionAttachmentUploaded,
+		CompanyID:  companyID,
+		TargetType: audit.TargetCharge,
+		TargetID:   audit.ID(chargeID),
+		Summary:    "Adjuntó un archivo al cobro",
+		Meta:       map[string]any{"file_name": origName, "bytes": size},
+	})
 	return nil
 }
 

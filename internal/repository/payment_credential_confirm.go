@@ -129,10 +129,10 @@ ORDER BY created_at DESC
 }
 
 // ConsumeCredentialConfirmation aplica el cambio cifrado y marca el enlace como usado.
-func (db *DB) ConsumeCredentialConfirmation(ctx context.Context, hash string, now time.Time) (string, string, error) {
+func (db *DB) ConsumeCredentialConfirmation(ctx context.Context, hash string, now time.Time) (int64, string, string, error) {
 	tx, err := db.db.BeginTx(ctx, nil)
 	if err != nil {
-		return "", "", err
+		return 0, "", "", err
 	}
 	defer func() { _ = tx.Rollback() }()
 
@@ -147,31 +147,31 @@ WHERE token_hash = $1
 FOR UPDATE
 `, hash).Scan(&companyID, &provider, &action, &raw, &expires, &used)
 	if err == sql.ErrNoRows {
-		return "", "", ErrCredentialConfirmMissing
+		return 0, "", "", ErrCredentialConfirmMissing
 	}
 	if err != nil {
-		return "", "", err
+		return 0, "", "", err
 	}
 	if used.Valid {
-		return "", "", ErrCredentialConfirmUsed
+		return 0, "", "", ErrCredentialConfirmUsed
 	}
 	if !expires.After(now) {
-		return "", "", ErrCredentialConfirmExpired
+		return 0, "", "", ErrCredentialConfirmExpired
 	}
 	var fields map[string]*string
 	if err := json.Unmarshal([]byte(raw), &fields); err != nil {
-		return "", "", err
+		return 0, "", "", err
 	}
 	if err := savePaymentCredentialFields(ctx, tx, companyID, fields); err != nil {
-		return "", "", err
+		return 0, "", "", err
 	}
 	if _, err := tx.ExecContext(ctx, `
 UPDATE payment_credential_confirmations SET used_at = $2 WHERE token_hash = $1
 `, hash, now); err != nil {
-		return "", "", err
+		return 0, "", "", err
 	}
 	if err := tx.Commit(); err != nil {
-		return "", "", err
+		return 0, "", "", err
 	}
-	return provider, action, nil
+	return companyID, provider, action, nil
 }

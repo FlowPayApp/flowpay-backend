@@ -22,6 +22,7 @@ import (
 	swaggerFiles "github.com/swaggo/files"
 	ginSwagger "github.com/swaggo/gin-swagger"
 
+	"github.com/flowpay/flowpay-backend/internal/audit"
 	"github.com/flowpay/flowpay-backend/internal/config"
 	"github.com/flowpay/flowpay-backend/internal/controller"
 	"github.com/flowpay/flowpay-backend/internal/jobs"
@@ -102,7 +103,7 @@ func main() {
 	if err := repo.EnsurePaymentCredentialsSchema(context.Background()); err != nil {
 		log.Printf("warn: credenciales de pago: %v", err)
 	}
-	if err := repo.EnsureAuditSchema(context.Background()); err != nil {
+	if err := repo.EnsureAuditEvents(context.Background()); err != nil {
 		log.Printf("warn: auditoría: %v", err)
 	}
 	if err := os.MkdirAll(filepath.Clean(cfg.UploadDir), 0o755); err != nil {
@@ -139,7 +140,7 @@ func main() {
 
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
-	r.Use(gin.Logger(), gin.Recovery())
+	r.Use(gin.Logger(), gin.Recovery(), audit.StampHTTP())
 	r.Use(func(c *gin.Context) {
 		c.Header("Cache-Control", "no-store")
 		c.Next()

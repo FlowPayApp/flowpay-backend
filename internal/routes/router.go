@@ -3,6 +3,7 @@ package routes
 import (
 	"net/http"
 
+	"github.com/flowpay/flowpay-backend/internal/audit"
 	"github.com/flowpay/flowpay-backend/internal/controller"
 	"github.com/flowpay/flowpay-backend/internal/middleware"
 	"github.com/gin-gonic/gin"
@@ -19,7 +20,7 @@ func Register(r *gin.Engine, deps controller.Deps, jwtMiddleware gin.HandlerFunc
 	r.POST("/api/public/credential-confirm/:token", deps.ConfirmPaymentCredentialChange)
 
 	api := r.Group("/api")
-	api.Use(jwtMiddleware)
+	api.Use(jwtMiddleware, audit.StampActor())
 	{
 		api.GET("/charges", deps.ListCharges)
 		api.POST("/charges", deps.CreateCharge)

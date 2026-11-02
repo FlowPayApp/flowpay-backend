@@ -8,7 +8,9 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/flowpay/flowpay-backend/internal/audit"
 	"github.com/flowpay/flowpay-backend/internal/model"
 	"github.com/flowpay/flowpay-backend/internal/service"
 	"github.com/flowpay/flowpay-backend/internal/twiliovalidate"
@@ -108,9 +110,26 @@ func (d *Deps) PutCompanyWhatsApp(c *gin.Context) {
 		return
 	}
 	if w == nil {
+		d.Svc.Record(c.Request.Context(), audit.Event{
+			Domain:     audit.DomainCredential,
+			Action:     audit.ActionWhatsAppNumberChanged,
+			CompanyID:  id,
+			TargetType: audit.TargetCompany,
+			TargetID:   audit.ID(id),
+			Summary:    "Quitó el número de WhatsApp",
+		})
 		c.JSON(http.StatusOK, gin.H{"company_id": id, "phone_number": ""})
 		return
 	}
+	d.Svc.Record(c.Request.Context(), audit.Event{
+		Domain:     audit.DomainCredential,
+		Action:     audit.ActionWhatsAppNumberChanged,
+		CompanyID:  id,
+		TargetType: audit.TargetCompany,
+		TargetID:   audit.ID(id),
+		Summary:    "Asignó un número de WhatsApp",
+		Meta:       map[string]any{"phone_number": w.PhoneNumber},
+	})
 	c.JSON(http.StatusOK, w)
 }
 
@@ -138,6 +157,7 @@ func (d *Deps) TwilioWhatsAppWebhook(c *gin.Context) {
 
 	if d.TwilioWebhook.ValidateTwilioSignature {
 		if unsignedTwilioWebhook(c) {
+			d.noteTwilioSignature(c, "missing")
 			c.Status(http.StatusForbidden)
 			return
 		}
@@ -148,6 +168,7 @@ func (d *Deps) TwilioWhatsAppWebhook(c *gin.Context) {
 		}
 		signedURL, ok := d.twilioSignedURL(c, form)
 		if !ok {
+			d.noteTwilioSignature(c, "invalid")
 			c.Status(http.StatusForbidden)
 			return
 		}
@@ -206,6 +227,45 @@ func (d *Deps) twilioSignedURL(c *gin.Context, form url.Values) (string, bool) {
 	return "", false
 }
 
+func (d *Deps) noteTwilioSignature(c *gin.Context, reason string) {
+	if d == nil || d.Svc == nil || !audit.Once("twilio-signature:"+c.ClientIP(), 10*time.Minute) {
+		return
+	}
+	d.Svc.Record(c.Request.Context(), audit.Event{
+		Domain:    audit.DomainMessage,
+		Action:    audit.ActionWhatsAppSignatureRejected,
+		Outcome:   audit.OutcomeDenied,
+		ActorRole: "webhook",
+		Summary:   "Webhook de WhatsApp con firma inválida",
+		Meta:      map[string]any{"reason": reason},
+	})
+}
+
+func (d *Deps) noteWhatsAppUndelivered(c *gin.Context, sid, status, errorCode string) {
+	if d == nil || d.Svc == nil || d.Svc.Repo == nil {
+		return
+	}
+	companyID, chargeID, err := d.Svc.Repo.DeliveryAuditTarget(c.Request.Context(), sid)
+	if err != nil {
+		return
+	}
+	meta := map[string]any{"channel": "whatsapp", "status": status}
+	if code := strings.TrimSpace(errorCode); code != "" && len(code) <= 20 {
+		meta["error_code"] = code
+	}
+	d.Svc.Record(c.Request.Context(), audit.Event{
+		Domain:     audit.DomainMessage,
+		Action:     audit.ActionReminderFailed,
+		Outcome:    audit.OutcomeFailure,
+		ActorRole:  "system",
+		CompanyID:  companyID,
+		TargetType: audit.TargetCharge,
+		TargetID:   audit.ID(chargeID),
+		Summary:    "WhatsApp no se pudo entregar",
+		Meta:       meta,
+	})
+}
+
 // TwilioStatusWebhook recibe los avisos de entrega de los WhatsApp enviados (StatusCallback).
 // Siempre exige la firma de Twilio: sin ella cualquiera podría marcar mensajes como leídos.
 //
@@ -229,6 +289,7 @@ func (d *Deps) TwilioStatusWebhook(c *gin.Context) {
 	}
 	form := c.Request.PostForm
 	if unsignedTwilioWebhook(c) {
+		d.noteTwilioSignature(c, "missing")
 		c.Status(http.StatusForbidden)
 		return
 	}
@@ -237,6 +298,7 @@ func (d *Deps) TwilioStatusWebhook(c *gin.Context) {
 		return
 	}
 	if _, ok := d.twilioSignedURL(c, form); !ok {
+		d.noteTwilioSignature(c, "invalid")
 		c.Status(http.StatusForbidden)
 		return
 	}
@@ -246,10 +308,15 @@ func (d *Deps) TwilioStatusWebhook(c *gin.Context) {
 	}
 	sid := form.Get("MessageSid")
 	status := form.Get("MessageStatus")
-	if err := d.WhatsApp.HandleDeliveryStatus(c.Request.Context(), sid, status, form.Get("ErrorCode")); err != nil {
+	changed, err := d.WhatsApp.HandleDeliveryStatus(c.Request.Context(), sid, status, form.Get("ErrorCode"))
+	if err != nil {
 		log.Printf("[FlowPay WhatsApp] estado sid=%s status=%s: %v", sid, status, err)
 		c.Status(http.StatusInternalServerError)
 		return
+	}
+	st := strings.ToLower(strings.TrimSpace(status))
+	if changed > 0 && (st == "failed" || st == "undelivered") {
+		d.noteWhatsAppUndelivered(c, sid, st, form.Get("ErrorCode"))
 	}
 	if code := form.Get("ErrorCode"); code != "" {
 		log.Printf("[FlowPay WhatsApp] estado sid=%s status=%s error=%s", sid, status, code)
